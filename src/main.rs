@@ -1,3 +1,8 @@
+mod fs;
+
 fn main() {
-    println!("Hello, world!");
+    let entries = fs::read_dir(std::path::Path::new("."), false).unwrap();
+    for e in entries {
+        println!("{} {}", e.name, e.size_label());
+    }
 }
