@@ -155,7 +155,8 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Folders stay on top (if asked); the sort applies inside each group.
+/// Hidden items come first (they only show when asked to), then folders (if asked);
+/// the sort applies inside each group.
 pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
     let by_name = |a: &Entry, b: &Entry| {
         if sort.natural {
@@ -165,12 +166,13 @@ pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
         }
     };
     entries.sort_by(|a, b| {
+        let hidden = is_hidden(&b.name).cmp(&is_hidden(&a.name));
         let groups = if sort.folders_on_top {
             b.is_dir.cmp(&a.is_dir)
         } else {
             Ordering::Equal
         };
-        groups.then_with(|| {
+        hidden.then(groups).then_with(|| {
             let primary = match sort.key {
                 SortKey::Name => by_name(a, b),
                 SortKey::Modified => a.modified.cmp(&b.modified),
@@ -186,6 +188,10 @@ pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
             primary.then_with(|| by_name(a, b))
         })
     });
+}
+
+fn is_hidden(name: &str) -> bool {
+    name.starts_with('.')
 }
 
 /// Read a directory, sorted.
@@ -376,6 +382,32 @@ mod tests {
 
     fn names(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|e| e.name.as_ref()).collect()
+    }
+
+    #[test]
+    fn hidden_items_come_first_then_folders() {
+        let root = scratch("hidden-first");
+        for d in ["zdir", ".hdir"] {
+            fs::create_dir(root.join(d)).unwrap();
+        }
+        for f in ["a.txt", ".env", ".b"] {
+            fs::write(root.join(f), "x").unwrap();
+        }
+        let sorted = |show, sort| names(&read_dir(&root, show, sort).unwrap()).join(",");
+        let name = Sort::by(SortKey::Name);
+        assert_eq!(sorted(true, name), ".hdir,.b,.env,zdir,a.txt");
+        // Whatever the column or direction, hidden stay on top.
+        let by_size = Sort {
+            ascending: false,
+            ..Sort::by(SortKey::Size)
+        };
+        assert!(sorted(true, by_size).starts_with(".hdir,"));
+        assert_eq!(
+            sorted(true, name.with_options(true, false)),
+            ".b,.env,.hdir,a.txt,zdir"
+        );
+        // Hidden off: nothing changes.
+        assert_eq!(sorted(false, name), "zdir,a.txt");
     }
 
     #[test]

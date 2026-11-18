@@ -140,7 +140,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘↓` | Ouvrir la sélection |
 | `⌘[` / `⌘]` | Précédent / suivant |
 | Boutons latéraux de la souris | Précédent / suivant |
-| `⌘⇧.` | Afficher / masquer les fichiers cachés |
+| `⌘⇧.` | Afficher / masquer les fichiers cachés (affichés tout en haut de la liste) |
 | Glisser-déposer | Déplacer vers un dossier, la sidebar ou le chemin du bas |
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
