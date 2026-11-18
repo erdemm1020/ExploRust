@@ -51,6 +51,8 @@ Mode release (optimisé, recommandé pour l'usage) :
 cargo run --release
 ```
 
+On peut aussi ouvrir un dossier précis : `cargo run --release -- ~/Documents`.
+
 Le binaire optimisé se trouve dans `target/release/ExploRust`. Pour l'installer dans `~/.cargo/bin` :
 
 ```sh
@@ -76,6 +78,9 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘[` / `⌘]` | Précédent / suivant |
 | Boutons latéraux de la souris | Précédent / suivant |
 | `⌘⇧.` | Afficher / masquer les fichiers cachés |
+| Glisser-déposer | Déplacer vers un dossier, la sidebar ou le chemin du bas |
+| `⌥` + glisser-déposer | Copier au lieu de déplacer |
+| Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
 | `⌘Q` | Quitter |
 
 ## Problèmes courants

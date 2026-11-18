@@ -4,9 +4,10 @@ use std::{
 };
 
 use gpui::{
-    ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Modifiers, MouseButton,
-    NavigationDirection, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
-    WindowControlArea, div, prelude::*, px, svg, uniform_list,
+    ClickEvent, Context, ExternalPaths, FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent,
+    Modifiers, MouseButton, MouseDownEvent, NavigationDirection, Pixels, Point, Render,
+    ScrollStrategy, SharedString, UniformListScrollHandle, Window, WindowControlArea, div,
+    prelude::*, px, svg, uniform_list,
 };
 
 use crate::{fs, theme::Theme};
@@ -14,6 +15,34 @@ use crate::{fs, theme::Theme};
 const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
 const SIDEBAR_W: f32 = 180.0;
+
+/// What is being dragged out of the list: the paths of the dragged rows.
+#[derive(Clone)]
+struct DragPaths(Vec<PathBuf>);
+
+/// The small label that follows the cursor while dragging.
+struct DragPreview {
+    label: SharedString,
+    position: Point<Pixels>,
+    theme: Theme,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        div().pl(self.position.x).pt(self.position.y).child(
+            div()
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .bg(t.accent)
+                .text_color(t.on_accent)
+                .text_size(px(12.0))
+                .shadow_md()
+                .child(self.label.clone()),
+        )
+    }
+}
 
 struct Place {
     name: SharedString,
@@ -72,8 +101,15 @@ impl Browser {
         let focus = cx.focus_handle();
         window.focus(&focus);
 
+        // Optional start folder: `ExploRust /some/path`.
+        let start = std::env::args_os()
+            .nth(1)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .unwrap_or(home);
+
         let mut this = Self {
-            cwd: home,
+            cwd: start,
             entries: Vec::new(),
             selected: BTreeSet::new(),
             anchor: None,
@@ -197,6 +233,44 @@ impl Browser {
         }
     }
 
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selected
+            .iter()
+            .filter_map(|&ix| self.entries.get(ix))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Move (or copy) dropped paths into `dest`, then refresh the listing.
+    fn drop_paths(&mut self, paths: &[PathBuf], dest: &Path, copy: bool, cx: &mut Context<Self>) {
+        for path in paths {
+            // A failed item (permissions, ...) must not stop the others.
+            let _ = fs::transfer(path, dest, copy);
+        }
+        self.reload();
+        cx.notify();
+    }
+
+    /// Make `el` a drop target: dragged rows are moved in (⌥ copies),
+    /// files dropped from other apps are copied in.
+    fn drop_target<E: InteractiveElement>(
+        el: E,
+        dest: PathBuf,
+        t: Theme,
+        cx: &mut Context<Self>,
+    ) -> E {
+        let over = Hsla::from(t.accent).opacity(0.25);
+        let internal = dest.clone();
+        el.drag_over::<DragPaths>(move |s, _, _, _| s.bg(over))
+            .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(over))
+            .on_drop(cx.listener(move |this, d: &DragPaths, window, cx| {
+                this.drop_paths(&d.0, &internal, window.modifiers().alt, cx)
+            }))
+            .on_drop(cx.listener(move |this, d: &ExternalPaths, _, cx| {
+                this.drop_paths(d.paths(), &dest, true, cx)
+            }))
+    }
+
     fn move_selection(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
         if self.entries.is_empty() {
             return;
@@ -307,7 +381,7 @@ impl Browser {
         let items = self.places.iter().enumerate().map(|(i, place)| {
             let active = place.path == self.cwd;
             let target = place.path.clone();
-            div()
+            let el = div()
                 .id(("place", i))
                 .h(px(28.0))
                 .px_2()
@@ -320,7 +394,8 @@ impl Browser {
                 .hover(|d| d.bg(t.hover))
                 .on_click(cx.listener(move |this, _, _, cx| this.go_to(target.clone(), cx)))
                 .child(icon(place.icon, t.folder))
-                .child(place.name.clone())
+                .child(place.name.clone());
+            Self::drop_target(el, place.path.clone(), t, cx)
         });
 
         div()
@@ -410,6 +485,15 @@ impl Browser {
                             (t.text, t.dim)
                         };
                         let icon = entry_icon(entry, t);
+                        let drag_paths = if selected {
+                            this.selected_paths()
+                        } else {
+                            vec![entry.path.clone()]
+                        };
+                        let label: SharedString = match drag_paths.as_slice() {
+                            [_] => entry.name.clone(),
+                            all => format!("{} items", all.len()).into(),
+                        };
                         Some(
                             div().w_full().px_2().child(
                                 div()
@@ -424,6 +508,28 @@ impl Browser {
                                     .text_color(fg)
                                     .when(selected, |d| d.bg(t.accent))
                                     .when(!selected, |d| d.hover(|d| d.bg(t.hover)))
+                                    // Pressing an unselected row selects it, so a drag
+                                    // carries what the user is pointing at.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                            let m = ev.modifiers;
+                                            if !this.selected.contains(&ix)
+                                                && !m.platform
+                                                && !m.shift
+                                            {
+                                                this.select_only(ix);
+                                                cx.notify();
+                                            }
+                                        }),
+                                    )
+                                    .on_drag(DragPaths(drag_paths), move |_, position, _, cx| {
+                                        cx.new(|_| DragPreview {
+                                            label: label.clone(),
+                                            position,
+                                            theme: t,
+                                        })
+                                    })
                                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                                         let m = ev.modifiers();
                                         this.click(ix, m);
@@ -432,6 +538,9 @@ impl Browser {
                                         }
                                         cx.notify();
                                     }))
+                                    .when(entry.is_dir, |d| {
+                                        Self::drop_target(d, entry.path.clone(), t, cx)
+                                    })
                                     .child(icon)
                                     .child(
                                         div()
@@ -457,11 +566,16 @@ impl Browser {
         .flex_1()
         .py_1();
 
+        // Files dropped on the empty part of the list land in the current folder.
+        let cwd = self.cwd.clone();
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
+            .on_drop(cx.listener(move |this, d: &ExternalPaths, _, cx| {
+                this.drop_paths(d.paths(), &cwd, true, cx)
+            }))
             .child(header)
             .child(list)
     }
@@ -487,18 +601,18 @@ impl Browser {
             if i > 0 {
                 bar = bar.child("›");
             }
-            bar = bar.child(
-                div()
-                    .id(("crumb", i))
-                    .px_1()
-                    .rounded_sm()
-                    .whitespace_nowrap()
-                    .when(i == last, |d| d.text_color(t.text))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(t.hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.go_to(path.clone(), cx)))
-                    .child(name),
-            );
+            let dest = path.clone();
+            let crumb = div()
+                .id(("crumb", i))
+                .px_1()
+                .rounded_sm()
+                .whitespace_nowrap()
+                .when(i == last, |d| d.text_color(t.text))
+                .cursor_pointer()
+                .hover(|d| d.bg(t.hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.go_to(path.clone(), cx)))
+                .child(name);
+            bar = bar.child(Self::drop_target(crumb, dest, t, cx));
         }
 
         let count = self.entries.len();
