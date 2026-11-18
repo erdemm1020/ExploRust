@@ -1,5 +1,11 @@
 use gpui::{Rgba, WindowAppearance, rgb};
-use objc2_app_kit::{NSColor, NSColorSpace};
+use objc2::MainThreadMarker;
+use objc2_app_kit::{
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSColor,
+    NSColorSpace,
+};
+
+use crate::config::{Config, ThemeMode};
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -16,14 +22,21 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Light or dark palette to match the system, with the accent color the
-    /// user picked in System Settings.
-    pub fn for_appearance(appearance: WindowAppearance) -> Self {
-        let mut theme = match appearance {
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
-            _ => Self::light(),
+    /// The palette for the user's settings: the system look unless a theme
+    /// is forced, with the chosen accent color (the system one by default).
+    pub fn resolve(config: &Config, appearance: WindowAppearance) -> Self {
+        let dark = match config.theme {
+            ThemeMode::System => {
+                matches!(
+                    appearance,
+                    WindowAppearance::Dark | WindowAppearance::VibrantDark
+                )
+            }
+            ThemeMode::Light => false,
+            ThemeMode::Dark => true,
         };
-        if let Some(accent) = system_accent() {
+        let mut theme = if dark { Self::dark() } else { Self::light() };
+        if let Some(accent) = config.accent.rgb().map(rgb).or_else(system_accent) {
             theme.accent = accent;
         }
         theme
@@ -58,6 +71,21 @@ impl Theme {
             file: rgb(0x636368),
         }
     }
+}
+
+/// Make the native parts (title bar, alerts, file dialogs) follow the chosen
+/// theme too: `System` hands the choice back to macOS.
+pub fn apply_native_appearance(mode: ThemeMode) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let name = match mode {
+        ThemeMode::System => None,
+        ThemeMode::Light => Some(unsafe { NSAppearanceNameAqua }),
+        ThemeMode::Dark => Some(unsafe { NSAppearanceNameDarkAqua }),
+    };
+    let appearance = name.and_then(NSAppearance::appearanceNamed);
+    NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
 }
 
 /// The system accent color, as currently resolved for light or dark.

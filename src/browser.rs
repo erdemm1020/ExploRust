@@ -21,7 +21,6 @@ use crate::{
 };
 
 const TOOLBAR_H: f32 = 44.0;
-const ROW_H: f32 = 26.0;
 const DATE_W: f32 = 170.0;
 const SEARCH_W: f32 = 200.0;
 const SIZE_W: f32 = 90.0;
@@ -111,9 +110,6 @@ struct ContextMenu {
     submenu: Option<Submenu>,
 }
 
-/// A folder with more items than this asks for confirmation before going to the Trash.
-const BIG_FOLDER: usize = 100;
-
 const MENU_W: f32 = 210.0;
 const MENU_ITEM_H: f32 = 24.0;
 const MENU_SEPARATOR_H: f32 = 9.0;
@@ -144,11 +140,13 @@ pub struct Browser {
     cursor: Option<usize>,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
-    show_hidden: bool,
     sort: Sort,
     dates: DateFormat,
     menu: Option<ContextMenu>,
     config: Config,
+    settings_open: bool,
+    /// Modification time of the folder when it was listed, to spot changes.
+    listed_at: Option<std::time::SystemTime>,
     renaming: Option<Renaming>,
     places: Vec<Place>,
     scroll: UniformListScrollHandle,
@@ -190,10 +188,19 @@ impl Browser {
         let focus = cx.focus_handle();
         window.focus(&focus);
 
-        // Optional start folder: `ExploRust /some/path`.
+        let config = Config::load();
+        crate::theme::apply_native_appearance(config.theme);
+
+        // Start folder: `ExploRust /some/path`, else the last one if asked, else home.
         let start = std::env::args_os()
             .nth(1)
             .map(PathBuf::from)
+            .or_else(|| {
+                config
+                    .reopen_last
+                    .then(|| config.last_folder.clone())
+                    .flatten()
+            })
             .filter(|p| p.is_dir())
             .unwrap_or(home);
 
@@ -208,17 +215,32 @@ impl Browser {
             cursor: None,
             back: Vec::new(),
             forward: Vec::new(),
-            show_hidden: false,
-            sort: Sort::by(SortKey::Name),
-            dates: DateFormat::new(),
+            sort: Sort::by(SortKey::Name).with_options(config.natural_sort, config.folders_on_top),
+            dates: DateFormat::new(config.relative_dates),
             menu: None,
-            config: Config::load(),
+            settings_open: false,
+            listed_at: None,
+            config,
             renaming: None,
             places,
             scroll: UniformListScrollHandle::new(),
             focus,
         };
         this.reload();
+
+        // Live refresh: look at the folder once a second (one `stat`, no watcher).
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                if this.update(cx, |this, cx| this.poll_changes(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         this
     }
 
@@ -237,8 +259,48 @@ impl Browser {
         self.menu = None;
         self.renaming = None;
         // An unreadable folder (permissions) just shows up empty.
-        self.all = fs::read_dir(&self.cwd, self.show_hidden, self.sort).unwrap_or_default();
+        self.all = fs::read_dir(&self.cwd, self.config.show_hidden, self.sort).unwrap_or_default();
+        self.listed_at = dir_mtime(&self.cwd);
         self.apply_filter();
+        self.remember_folder();
+    }
+
+    fn remember_folder(&mut self) {
+        if self.config.reopen_last && self.config.last_folder.as_ref() != Some(&self.cwd) {
+            self.config.last_folder = Some(self.cwd.clone());
+            let _ = self.config.save();
+        }
+    }
+
+    /// Reload when the folder changed on disk (added, removed or renamed items).
+    fn poll_changes(&mut self, cx: &mut Context<Self>) {
+        let busy = self.renaming.is_some() || self.menu.is_some() || self.settings_open;
+        if !self.config.live_refresh || busy || dir_mtime(&self.cwd) == self.listed_at {
+            return;
+        }
+        let keep = self.selected_paths();
+        self.reload();
+        // Keep the selection, without scrolling the list around.
+        self.selected = (0..self.entries.len())
+            .filter(|&ix| keep.contains(&self.entries[ix].path))
+            .collect();
+        self.anchor = self.selected.first().copied();
+        self.cursor = self.selected.last().copied();
+        cx.notify();
+    }
+
+    /// Apply the settings that need more than a repaint, and save them.
+    fn update_config(&mut self, change: impl FnOnce(&mut Config), cx: &mut Context<Self>) {
+        change(&mut self.config);
+        // Not being able to save only means the change is forgotten at next launch.
+        let _ = self.config.save();
+        self.sort = self
+            .sort
+            .with_options(self.config.natural_sort, self.config.folders_on_top);
+        self.dates = DateFormat::new(self.config.relative_dates);
+        crate::theme::apply_native_appearance(self.config.theme);
+        self.reload();
+        cx.notify();
     }
 
     /// Rebuild the visible list from the search text.
@@ -412,7 +474,7 @@ impl Browser {
             entries.push(MenuEntry::Separator);
             entries.push(item("Move to Trash", Trash));
         } else {
-            let hidden = if self.show_hidden {
+            let hidden = if self.config.show_hidden {
                 "Hide Hidden Files"
             } else {
                 "Show Hidden Files"
@@ -590,8 +652,8 @@ impl Browser {
             MenuAction::NewFolder => self.create_item(fs::create_folder),
             MenuAction::NewFile => self.create_item(fs::create_file),
             MenuAction::ToggleHidden => {
-                self.show_hidden = !self.show_hidden;
-                self.reload();
+                let show = !self.config.show_hidden;
+                self.update_config(|c| c.show_hidden = show, cx);
             }
         }
         cx.notify();
@@ -609,9 +671,12 @@ impl Browser {
     /// ⌘⌫: move the selection to the Trash. A big folder asks first.
     fn trash_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = self.selected_paths();
+        // `None`: the user turned the warning off.
+        let limit = self.config.trash_warning;
         let big: Vec<String> = paths
             .iter()
-            .filter(|p| p.is_dir() && fs::count_items(p, BIG_FOLDER) > BIG_FOLDER)
+            .filter(|p| p.is_dir())
+            .filter(|p| limit.is_some_and(|n| fs::count_items(p, n) > n))
             .filter_map(|p| p.file_name())
             .map(|n| format!("“{}”", n.to_string_lossy()))
             .collect();
@@ -627,9 +692,10 @@ impl Browser {
             all => format!("Move these {} items to the Trash?", all.len()),
         };
         let detail = format!(
-            "{} contain{} more than {BIG_FOLDER} items. You can get them back from the Trash.",
+            "{} contain{} more than {} items. You can get them back from the Trash.",
             big.join(", "),
             if big.len() == 1 { "s" } else { "" },
+            limit.unwrap_or_default(),
         );
         // "Cancel" comes first so it is the button Return would press.
         let answer = window.prompt(
@@ -888,9 +954,8 @@ impl Browser {
             "[" if cmd => self.go_back(cx),
             "]" if cmd => self.go_forward(cx),
             "." if cmd && k.modifiers.shift => {
-                self.show_hidden = !self.show_hidden;
-                self.reload();
-                cx.notify();
+                let show = !self.config.show_hidden;
+                self.update_config(|c| c.show_hidden = show, cx);
             }
             _ => {}
         }
@@ -915,7 +980,7 @@ impl Focusable for Browser {
 
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = Theme::for_appearance(window.appearance());
+        let t = Theme::resolve(&self.config, window.appearance());
 
         div()
             .id("root")
@@ -1341,6 +1406,8 @@ impl Browser {
                             (t.text, t.dim)
                         };
                         let icon = entry_icon(entry, t);
+                        let is_dir = entry.is_dir;
+                        let row_h = this.config.density.row_height();
                         let drag_paths = if selected {
                             this.selected_paths()
                         } else {
@@ -1354,7 +1421,7 @@ impl Browser {
                             div().w_full().px_2().child(
                                 div()
                                     .id(ix)
-                                    .h(px(ROW_H))
+                                    .h(px(row_h))
                                     .w_full()
                                     .px_2()
                                     .flex()
@@ -1400,7 +1467,10 @@ impl Browser {
                                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                                         let m = ev.modifiers();
                                         this.click(ix, m);
-                                        if ev.click_count() >= 2 && !m.platform && !m.shift {
+                                        let plain = !m.platform && !m.shift;
+                                        // Double click, or a single click on a folder if asked.
+                                        let single = this.config.single_click && is_dir;
+                                        if plain && (ev.click_count() >= 2 || single) {
                                             this.open_selected(cx);
                                         }
                                         cx.notify();
@@ -1611,4 +1681,9 @@ fn rename_input(field: &TextField, t: Theme) -> impl IntoElement {
         .border_1()
         .border_color(t.accent)
         .child(text_runs(field, true, t))
+}
+
+/// When the folder's content last changed (items added, removed, renamed).
+fn dir_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
 }

@@ -8,11 +8,12 @@ use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle};
 pub struct DateFormat(Retained<NSDateFormatter>);
 
 impl DateFormat {
-    pub fn new() -> Self {
+    /// `relative`: "Today" / "Yesterday" for recent dates.
+    pub fn new(relative: bool) -> Self {
         let f = NSDateFormatter::new();
         f.setDateStyle(NSDateFormatterStyle::MediumStyle);
         f.setTimeStyle(NSDateFormatterStyle::ShortStyle);
-        f.setDoesRelativeDateFormatting(true);
+        f.setDoesRelativeDateFormatting(relative);
         Self(f)
     }
 
@@ -33,10 +34,13 @@ mod tests {
 
     #[test]
     fn formats_a_date_with_time() {
-        let f = DateFormat::new();
+        let f = DateFormat::new(true);
         let text = f.format(UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000));
         println!("{text}");
         assert!(text.contains("2001"), "{text}");
         assert!(!f.format(SystemTime::now()).is_empty());
+        // Without relative dates, recent days keep their numbers.
+        let now = DateFormat::new(false).format(SystemTime::now());
+        assert!(now.chars().any(|c| c.is_ascii_digit()), "{now}");
     }
 }
