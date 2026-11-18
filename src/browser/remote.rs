@@ -503,6 +503,7 @@ impl Browser {
         if !self.ssh_enabled() {
             return None;
         }
+        let rail = self.sidebar_collapsed;
         let row = |id: (&'static str, usize), label: String, active: bool| {
             div()
                 .id(id)
@@ -515,17 +516,27 @@ impl Browser {
                 .cursor_pointer()
                 .when(active, |d| d.bg(t.hover))
                 .hover(|d| d.bg(t.hover))
+                .when(rail, |d| d.justify_center())
                 .child(icon("icons/server.svg", t.dim))
-                .child(div().min_w_0().truncate().child(label))
+                .when(!rail, |d| d.child(div().min_w_0().truncate().child(label)))
         };
-        let mut section = div().px_2().pt_3().flex().flex_col().gap_0p5().child(
-            div()
-                .px_2()
-                .pb_1()
-                .text_size(px(11.0))
-                .text_color(t.dim)
-                .child("SERVERS"),
-        );
+        // On the icon rail there is no room for the title.
+        let mut section = div()
+            .px_2()
+            .pt_3()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .when(!rail, |d| {
+                d.child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_size(px(11.0))
+                        .text_color(t.dim)
+                        .child("SERVERS"),
+                )
+            });
         for (i, host) in self.ssh_hosts.iter().take(12).enumerate() {
             let target = host.clone();
             section = section.child(

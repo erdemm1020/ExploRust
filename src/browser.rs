@@ -35,7 +35,11 @@ const TOOLBAR_H: f32 = 44.0;
 const DATE_W: f32 = 170.0;
 const SEARCH_W: f32 = 200.0;
 const SIZE_W: f32 = 90.0;
-const SIDEBAR_W: f32 = 180.0;
+/// The sidebar can be dragged between these widths; narrower than the minimum it
+/// folds into a rail of icons.
+const SIDEBAR_MIN: f32 = 140.0;
+const SIDEBAR_MAX: f32 = 360.0;
+const SIDEBAR_RAIL: f32 = 80.0;
 
 /// What is being dragged out of the list: the paths of the dragged rows.
 #[derive(Clone)]
@@ -191,6 +195,10 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    sidebar_w: f32,
+    sidebar_collapsed: bool,
+    /// While the sidebar edge is dragged: where the mouse was, and the width then.
+    resizing_sidebar: Option<(f32, f32)>,
     /// The row of the open menu picked with the arrow keys.
     menu_cursor: Option<usize>,
     settings_scroll: gpui::ScrollHandle,
@@ -304,6 +312,9 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            sidebar_w: config.sidebar_width as f32,
+            sidebar_collapsed: config.sidebar_collapsed,
+            resizing_sidebar: None,
             menu_cursor: None,
             settings_scroll: gpui::ScrollHandle::new(),
             claude_ready: false,
@@ -1323,6 +1334,9 @@ impl Browser {
             }
             "backspace" if cmd => self.trash_selection(window, cx),
             // ⌘⌥C copies the path as text, like Finder.
+            "s" if cmd && k.modifiers.alt => {
+                self.toggle_sidebar(cx);
+            }
             "i" if cmd => self.toggle_info(cx),
             "z" if cmd && k.modifiers.shift => self.redo_last(cx),
             "z" if cmd => self.undo_last(cx),
@@ -1408,6 +1422,25 @@ impl Render for Browser {
                     cx.stop_propagation();
                 }
             }))
+            // Dragging the edge of the sidebar.
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    // The button was let go outside the window: stop following the mouse.
+                    if this.resizing_sidebar.take().is_some() {
+                        this.save_sidebar();
+                    }
+                } else {
+                    this.drag_sidebar(f32::from(ev.position.x), cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    if this.resizing_sidebar.take().is_some() {
+                        this.save_sidebar();
+                    }
+                }),
+            )
             // Side mouse buttons: back / forward.
             .on_mouse_up(
                 MouseButton::Navigate(NavigationDirection::Back),
@@ -1659,17 +1692,56 @@ impl Browser {
         )
     }
 
+    fn sidebar_width(&self) -> f32 {
+        if self.sidebar_collapsed {
+            SIDEBAR_RAIL
+        } else {
+            self.sidebar_w
+        }
+    }
+
+    /// Fold the sidebar into icons, or open it again (⌘⌥S, or a double click on its edge).
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        self.save_sidebar();
+        cx.notify();
+    }
+
+    fn save_sidebar(&mut self) {
+        self.config.sidebar_width = self.sidebar_w.round() as u32;
+        self.config.sidebar_collapsed = self.sidebar_collapsed;
+        let _ = self.config.save();
+    }
+
+    /// The mouse moved while the edge is held: follow it.
+    fn drag_sidebar(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
+        let Some((from, start)) = self.resizing_sidebar else {
+            return;
+        };
+        let width = start + (mouse_x - from);
+        // Dragged below the minimum, it folds into the rail.
+        if width < SIDEBAR_MIN - 30.0 {
+            self.sidebar_collapsed = true;
+        } else {
+            self.sidebar_collapsed = false;
+            self.sidebar_w = width.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        }
+        cx.notify();
+    }
+
     fn sidebar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let rail = self.sidebar_collapsed;
         let items = self.places.iter().enumerate().map(|(i, place)| {
             let active = place.path == self.cwd && !self.settings_open;
             let target = place.path.clone();
             let el = div()
                 .id(("place", i))
-                .h(px(28.0))
+                .h(px(if rail { 32.0 } else { 28.0 }))
                 .px_2()
                 .flex()
                 .items_center()
                 .gap_2()
+                .when(rail, |d| d.justify_center())
                 .rounded_md()
                 .cursor_pointer()
                 .when(active, |d| d.bg(t.hover))
@@ -1680,7 +1752,9 @@ impl Browser {
                     cx.notify();
                 }))
                 .child(icon(place.icon, t.folder))
-                .child(place.name.clone());
+                .when(!rail, |d| {
+                    d.child(div().min_w_0().truncate().child(place.name.clone()))
+                });
             // Dropping on a local place makes no sense while a server is shown.
             if self.remote.is_some() {
                 el
@@ -1690,7 +1764,8 @@ impl Browser {
         });
 
         div()
-            .w(px(SIDEBAR_W))
+            .relative()
+            .w(px(self.sidebar_width()))
             .flex_none()
             .h_full()
             .flex()
@@ -1712,11 +1787,12 @@ impl Browser {
                 div().p_2().child(
                     div()
                         .id("settings-button")
-                        .h(px(28.0))
+                        .h(px(if rail { 32.0 } else { 28.0 }))
                         .px_2()
                         .flex()
                         .items_center()
                         .gap_2()
+                        .when(rail, |d| d.justify_center())
                         .rounded_md()
                         .cursor_pointer()
                         .text_color(if self.settings_open { t.text } else { t.dim })
@@ -1727,16 +1803,41 @@ impl Browser {
                             "icons/settings.svg",
                             if self.settings_open { t.text } else { t.dim },
                         ))
-                        .child("Settings"),
+                        .when(!rail, |d| d.child("Settings")),
                 ),
             )
+            .when(!rail, |d| {
+                d.child(
+                    div()
+                        .px_4()
+                        .pb_3()
+                        .text_size(px(11.0))
+                        .text_color(t.dim)
+                        .child(format!("ExploRust v{}", crate::updater::VERSION)),
+                )
+            })
+            // The edge: drag to resize or fold, double click to fold or open.
             .child(
                 div()
-                    .px_4()
-                    .pb_3()
-                    .text_size(px(11.0))
-                    .text_color(t.dim)
-                    .child(format!("ExploRust v{}", crate::updater::VERSION)),
+                    .id("sidebar-grip")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(-3.0))
+                    .w(px(7.0))
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                            if ev.click_count >= 2 {
+                                this.resizing_sidebar = None;
+                                this.toggle_sidebar(cx);
+                            } else {
+                                this.resizing_sidebar =
+                                    Some((f32::from(ev.position.x), this.sidebar_width()));
+                            }
+                        }),
+                    ),
             )
     }
 

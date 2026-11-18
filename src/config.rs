@@ -77,6 +77,14 @@ choices! {
     } default Opus
 }
 
+choices! {
+    /// How much the file icons say about the file.
+    IconStyle {
+        Simple = "simple", "Simple";
+        Advanced = "advanced", "Advanced";
+    } default Advanced
+}
+
 impl Accent {
     /// The fixed color, or `None` for the system accent.
     pub fn rgb(self) -> Option<u32> {
@@ -123,6 +131,11 @@ pub struct Config {
     /// Start in the folder that was open last time.
     pub reopen_last: bool,
     pub last_folder: Option<PathBuf>,
+    /// Width of the sidebar when it is open (points).
+    pub sidebar_width: u32,
+    /// Only the icons of the sidebar are shown.
+    pub sidebar_collapsed: bool,
+    pub icon_style: IconStyle,
     /// Show the size of folders in the list (found out in the background).
     pub folder_sizes: bool,
     /// Master switch of the developer features below: off hides them all.
@@ -162,6 +175,9 @@ impl Default for Config {
             show_hidden: false,
             reopen_last: false,
             last_folder: None,
+            sidebar_width: 180,
+            sidebar_collapsed: false,
+            icon_style: IconStyle::default(),
             folder_sizes: true,
             dev_tools: true,
             git: true,
@@ -224,6 +240,15 @@ impl Config {
                 "live_refresh" => c.live_refresh = flag(value).unwrap_or(c.live_refresh),
                 "relative_dates" => c.relative_dates = flag(value).unwrap_or(c.relative_dates),
                 "show_hidden" => c.show_hidden = flag(value).unwrap_or(c.show_hidden),
+                "sidebar_width" => {
+                    c.sidebar_width = value
+                        .parse()
+                        .map_or(c.sidebar_width, |w: u32| w.clamp(140, 360));
+                }
+                "sidebar_collapsed" => {
+                    c.sidebar_collapsed = flag(value).unwrap_or(c.sidebar_collapsed)
+                }
+                "icon_style" => c.icon_style = IconStyle::parse(value).unwrap_or(c.icon_style),
                 "folder_sizes" => c.folder_sizes = flag(value).unwrap_or(c.folder_sizes),
                 "dev_tools" => c.dev_tools = flag(value).unwrap_or(c.dev_tools),
                 "git" => c.git = flag(value).unwrap_or(c.git),
@@ -259,7 +284,8 @@ impl Config {
              single_click = {}\nlive_refresh = {}\nrelative_dates = {}\nshow_hidden = {}\n\
              reopen_last = {}\ncheck_updates = {}\ntrash_warning = {}\n\
              folder_sizes = {}\ndev_tools = {}\ngit = {}\ngit_dim_ignored = {}\nproject_detect = {}\n\
-             ssh = {}\nclaude = {}\nclaude_model = {}\n",
+             ssh = {}\nclaude = {}\nclaude_model = {}\n\
+             sidebar_width = {}\nsidebar_collapsed = {}\nicon_style = {}\n",
             self.theme.key(),
             self.accent.key(),
             self.density.key(),
@@ -281,6 +307,9 @@ impl Config {
             flag(self.ssh),
             flag(self.claude),
             self.claude_model.key(),
+            self.sidebar_width,
+            flag(self.sidebar_collapsed),
+            self.icon_style.key(),
         );
         for (key, value) in [
             ("last_folder", &self.last_folder),
@@ -325,6 +354,9 @@ mod tests {
             last_folder: Some("/Users/me/My Docs".into()),
             check_updates: false,
             skipped_version: Some("0.3.0".into()),
+            sidebar_width: 260,
+            sidebar_collapsed: true,
+            icon_style: IconStyle::Simple,
             folder_sizes: false,
             dev_tools: false,
             git: false,
@@ -350,6 +382,13 @@ mod tests {
         assert!(!c.single_click);
         assert_eq!(c.trash_warning, Some(100));
         assert_eq!(Config::parse("terminal =\n"), Config::default());
+    }
+
+    #[test]
+    fn the_sidebar_width_stays_in_range() {
+        assert_eq!(Config::parse("sidebar_width = 9999\n").sidebar_width, 360);
+        assert_eq!(Config::parse("sidebar_width = 5\n").sidebar_width, 140);
+        assert_eq!(Config::parse("sidebar_width = wide\n").sidebar_width, 180);
     }
 
     #[test]
