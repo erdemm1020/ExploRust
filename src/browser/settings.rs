@@ -3,7 +3,7 @@
 use gpui::{AnyElement, FontWeight, transparent_black};
 
 use super::*;
-use crate::config::{Accent, Density, ThemeMode};
+use crate::config::{Accent, ClaudeModel, Density, ThemeMode};
 
 impl Browser {
     pub(super) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -90,6 +90,15 @@ impl Browser {
             ),
             self.switch_row(
                 t,
+                "folder-sizes",
+                "Folder sizes",
+                "Show how much space folders take (found out in the background).",
+                c.folder_sizes,
+                |c, v| c.folder_sizes = v,
+                cx,
+            ),
+            self.switch_row(
+                t,
                 "relative-dates",
                 "Relative dates",
                 "“Today at 12:40” instead of a full date.",
@@ -124,6 +133,96 @@ impl Browser {
             && let Some(app) = AppInfo::from_path(custom)
         {
             editors.push((Some(custom.clone()), app.name.into()));
+        }
+
+        // Everything for people who code. One switch hides the lot.
+        let mut developer = vec![self.switch_row(
+            t,
+            "dev-tools",
+            "Developer tools",
+            "Git, project commands, servers and Claude. Turn this off if you do not code.",
+            c.dev_tools,
+            |c, v| c.dev_tools = v,
+            cx,
+        )];
+        if c.dev_tools {
+            developer.extend([
+                self.switch_row(
+                    t,
+                    "git",
+                    "Git",
+                    "Badges on changed files, the branch in the status bar, Stage and Discard in the menu.",
+                    c.git,
+                    |c, v| c.git = v,
+                    cx,
+                ),
+                self.switch_row(
+                    t,
+                    "git-dim",
+                    "Dim ignored files",
+                    "Files and folders that .gitignore leaves out are shown fainter.",
+                    c.git_dim_ignored,
+                    |c, v| c.git_dim_ignored = v,
+                    cx,
+                ),
+                self.switch_row(
+                    t,
+                    "projects",
+                    "Project folders",
+                    "A tag on Rust, Node, Go… folders, and their commands (run, build, test) in the menu.",
+                    c.project_detect,
+                    |c, v| c.project_detect = v,
+                    cx,
+                ),
+                self.switch_row(
+                    t,
+                    "ssh",
+                    "Servers (SSH)",
+                    "Browse servers like folders (⌘K). Uses your ssh keys.",
+                    c.ssh,
+                    |c, v| c.ssh = v,
+                    cx,
+                ),
+                self.switch_row(
+                    t,
+                    "claude",
+                    "Claude",
+                    "Ask Claude about a file or a folder. Sends what you choose to Anthropic, only when you ask.",
+                    c.claude,
+                    |c, v| c.claude = v,
+                    cx,
+                ),
+            ]);
+            if c.claude {
+                developer.push(
+                    self.row(
+                        t,
+                        "Claude model",
+                        "Opus is the most capable, Haiku the fastest and cheapest.",
+                        self.segmented(
+                            t,
+                            "claude-model",
+                            ClaudeModel::ALL
+                                .iter()
+                                .map(|m| (*m, m.label().into()))
+                                .collect(),
+                            c.claude_model,
+                            |c, v| c.claude_model = v,
+                            cx,
+                        ),
+                    ),
+                );
+                developer.push(self.row(
+                    t,
+                    "API key",
+                    if self.claude_ready {
+                        "Saved in your Keychain."
+                    } else {
+                        "Copy your key (sk-ant-…) then save it from the clipboard. It goes to the Keychain."
+                    },
+                    self.key_buttons(t, cx),
+                ));
+            }
         }
 
         let behavior = vec![
@@ -276,6 +375,7 @@ impl Browser {
                             .child(section(t, "Appearance", appearance))
                             .child(section(t, "Files", files))
                             .child(section(t, "Behavior", behavior))
+                            .child(section(t, "Developer", developer))
                             .child(section(t, "Updates", self.update_rows(t, cx)))
                             .child(reset)
                             .child(

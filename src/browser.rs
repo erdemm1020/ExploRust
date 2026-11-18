@@ -11,6 +11,7 @@ use gpui::{
     svg, uniform_list,
 };
 
+mod claude_ui;
 mod git_ui;
 mod ops;
 mod project_ui;
@@ -76,6 +77,10 @@ enum MenuAction {
     OpenEditor,
     OpenInChoices,
     Info,
+    ClaudeExplain,
+    ClaudeName,
+    ClaudeSummarize,
+    ClaudeOrganize,
     RemoteOpen,
     RemoteDownload,
     RemoteDelete,
@@ -185,6 +190,8 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    claude_ready: bool,
+    ai: Option<claude_ui::AiPanel>,
     /// The server whose folder is shown (`cwd` is then a path on that server).
     remote: Option<String>,
     remote_gen: u64,
@@ -293,6 +300,8 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            claude_ready: false,
+            ai: None,
             remote: None,
             remote_gen: 0,
             remote_loading: false,
@@ -328,6 +337,10 @@ impl Browser {
             focus,
         };
         this.reload();
+
+        if this.config.claude {
+            this.check_claude_key(cx);
+        }
 
         // `ExploRust ssh://host/folder` opens a server straight away.
         if let Some(target) = std::env::args().nth(1).filter(|a| a.starts_with("ssh://"))
@@ -614,6 +627,7 @@ impl Browser {
         let terminal = item(&format!("Open in {}", self.terminal().name), OpenTerminal);
         let open_in = item("Open in…", OpenInChoices);
         let project = self.project_menu(on_item);
+        let claude = self.claude_menu(on_item);
         let selected: Vec<&fs::Entry> = self
             .selected
             .iter()
@@ -663,6 +677,7 @@ impl Browser {
             }
             entries.extend(self.git_menu(true));
             entries.extend(project);
+            entries.extend(claude);
             entries.push(MenuEntry::Separator);
             entries.push(item("Move to Trash", Trash));
         } else {
@@ -679,6 +694,7 @@ impl Browser {
             entries.push(open_in);
             entries.extend(self.git_menu(false));
             entries.extend(project);
+            entries.extend(claude);
             entries.push(MenuEntry::Separator);
             entries.push(item(hidden, ToggleHidden));
         }
@@ -905,6 +921,10 @@ impl Browser {
                 }
             }
             MenuAction::Info => self.toggle_info(cx),
+            a @ (MenuAction::ClaudeExplain
+            | MenuAction::ClaudeName
+            | MenuAction::ClaudeSummarize
+            | MenuAction::ClaudeOrganize) => self.claude_task(a, cx),
             MenuAction::RemoteOpen => self.open_remote(cx),
             MenuAction::RemoteDownload => self.download_remote(cx),
             MenuAction::RemoteDelete => return self.remote_delete(window, cx),
@@ -1186,6 +1206,9 @@ impl Browser {
     }
 
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ai.is_some() {
+            return self.on_ai_key(ev, cx);
+        }
         if self.connect.is_some() {
             return self.on_connect_key(ev, cx);
         }
@@ -1357,6 +1380,7 @@ impl Render for Browser {
             })
             .children(self.context_menu(t, cx))
             .children(self.connect_dialog(t, cx))
+            .children(self.ai_dialog(t, cx))
     }
 }
 
