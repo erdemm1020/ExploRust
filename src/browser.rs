@@ -13,6 +13,7 @@ use gpui::{
 
 mod git_ui;
 mod ops;
+mod project_ui;
 mod scans;
 mod settings;
 mod updates;
@@ -74,6 +75,7 @@ enum MenuAction {
     OpenEditor,
     OpenInChoices,
     Info,
+    RunTask(u8),
     GitStage,
     GitUnstage,
     GitDiscard,
@@ -176,6 +178,10 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    projects: std::collections::HashMap<PathBuf, crate::project::Kind>,
+    project_scan_id: u64,
+    /// The commands the open context menu offers, and the folder to run them in.
+    menu_tasks: Option<(PathBuf, Vec<crate::project::Task>)>,
     git: Option<crate::git::Repo>,
     git_scan_id: u64,
     git_tick: u8,
@@ -270,6 +276,9 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            projects: Default::default(),
+            project_scan_id: 0,
+            menu_tasks: None,
             git: None,
             git_scan_id: 0,
             git_tick: 0,
@@ -417,6 +426,7 @@ impl Browser {
         self.sizing.clear();
         self.info = None;
         self.git = None;
+        self.projects.clear();
     }
 
     /// Leaving a folder leaves its search behind, like Finder.
@@ -540,6 +550,7 @@ impl Browser {
             .map(|e| item(&format!("Open in {}", e.name), OpenEditor));
         let terminal = item(&format!("Open in {}", self.terminal().name), OpenTerminal);
         let open_in = item("Open in…", OpenInChoices);
+        let project = self.project_menu(on_item);
         let selected: Vec<&fs::Entry> = self
             .selected
             .iter()
@@ -588,6 +599,7 @@ impl Browser {
                 entries.push(item("Rename", Rename));
             }
             entries.extend(self.git_menu(true));
+            entries.extend(project);
             entries.push(MenuEntry::Separator);
             entries.push(item("Move to Trash", Trash));
         } else {
@@ -603,6 +615,7 @@ impl Browser {
             entries.push(terminal);
             entries.push(open_in);
             entries.extend(self.git_menu(false));
+            entries.extend(project);
             entries.push(MenuEntry::Separator);
             entries.push(item(hidden, ToggleHidden));
         }
@@ -829,6 +842,7 @@ impl Browser {
                 }
             }
             MenuAction::Info => self.toggle_info(cx),
+            MenuAction::RunTask(i) => self.run_task(i, cx),
             MenuAction::GitStage => self.git_stage(true, cx),
             MenuAction::GitUnstage => self.git_stage(false, cx),
             MenuAction::GitDiscard => return self.git_discard(window, cx),
@@ -1765,8 +1779,16 @@ impl Browser {
                                         None => div()
                                             .flex_1()
                                             .min_w_0()
-                                            .truncate()
-                                            .child(entry.name.clone())
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(entry.name.clone()),
+                                            )
+                                            .children(this.project_tag(entry, selected, t))
                                             .into_any_element(),
                                     })
                                     .when(this.git.is_some(), |d| {
