@@ -10,6 +10,8 @@ use gpui::{
     Window, WindowControlArea, anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
+mod settings;
+
 use crate::{
     apps::{self, AppInfo},
     clipboard,
@@ -145,6 +147,8 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    /// Terminal apps found when the settings page was opened.
+    terminals: Vec<AppInfo>,
     /// Modification time of the folder when it was listed, to spot changes.
     listed_at: Option<std::time::SystemTime>,
     renaming: Option<Renaming>,
@@ -219,6 +223,7 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            terminals: Vec::new(),
             listed_at: None,
             config,
             renaming: None,
@@ -906,6 +911,17 @@ impl Browser {
         if self.search_focused {
             return self.on_search_key(ev, cx);
         }
+        // ⌘, toggles the settings (the macOS habit); Escape closes them.
+        let k = &ev.keystroke;
+        if k.key == "," && k.modifiers.platform {
+            return self.toggle_settings(cx);
+        }
+        if self.settings_open {
+            if k.key == "escape" {
+                self.toggle_settings(cx);
+            }
+            return;
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform;
         match k.key.as_str() {
@@ -1013,7 +1029,9 @@ impl Render for Browser {
             .text_color(t.text)
             .text_size(px(13.0))
             .child(self.sidebar(t, cx))
-            .child(
+            .child(if self.settings_open {
+                self.settings_page(t, cx).into_any_element()
+            } else {
                 div()
                     .flex_1()
                     .min_w_0()
@@ -1021,8 +1039,9 @@ impl Render for Browser {
                     .flex_col()
                     .child(self.toolbar(t, cx))
                     .child(self.list(t, cx))
-                    .child(self.status_bar(t, cx)),
-            )
+                    .child(self.status_bar(t, cx))
+                    .into_any_element()
+            })
             .children(self.context_menu(t, cx))
     }
 }
@@ -1209,7 +1228,7 @@ impl Browser {
 
     fn sidebar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let items = self.places.iter().enumerate().map(|(i, place)| {
-            let active = place.path == self.cwd;
+            let active = place.path == self.cwd && !self.settings_open;
             let target = place.path.clone();
             let el = div()
                 .id(("place", i))
@@ -1222,7 +1241,11 @@ impl Browser {
                 .cursor_pointer()
                 .when(active, |d| d.bg(t.hover))
                 .hover(|d| d.bg(t.hover))
-                .on_click(cx.listener(move |this, _, _, cx| this.go_to(target.clone(), cx)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings_open = false;
+                    this.go_to(target.clone(), cx);
+                    cx.notify();
+                }))
                 .child(icon(place.icon, t.folder))
                 .child(place.name.clone());
             Self::drop_target(el, place.path.clone(), t, cx)
@@ -1244,6 +1267,30 @@ impl Browser {
                     .window_control_area(WindowControlArea::Drag),
             )
             .child(div().px_2().flex().flex_col().gap_0p5().children(items))
+            // Pushes the settings button to the bottom.
+            .child(div().flex_1())
+            .child(
+                div().p_2().child(
+                    div()
+                        .id("settings-button")
+                        .h(px(28.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_color(if self.settings_open { t.text } else { t.dim })
+                        .when(self.settings_open, |d| d.bg(t.hover))
+                        .hover(|d| d.bg(t.hover).text_color(t.text))
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx)))
+                        .child(icon(
+                            "icons/settings.svg",
+                            if self.settings_open { t.text } else { t.dim },
+                        ))
+                        .child("Settings"),
+                ),
+            )
     }
 
     fn toolbar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {

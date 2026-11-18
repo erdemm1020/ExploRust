@@ -77,6 +77,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘⇧N` | Nouveau dossier (renommé aussitôt) |
 | `⌘⌫` | Mettre la sélection à la corbeille (confirmation si un dossier contient plus de 100 éléments) |
 | `⌘F` | Rechercher dans le dossier (`↓` passe à la liste, `Échap` efface) |
+| `⌘,` | Ouvrir / fermer les réglages (`Échap` ferme) |
 | `⌘A` | Tout sélectionner |
 | `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
 | `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |
@@ -95,10 +96,22 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | Clic droit dans le vide | Nouveau dossier ou nouveau fichier (renommés aussitôt), ouvrir le terminal ici (ou « Open in… » pour en choisir un autre), afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
 
+## Réglages
+
+Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changements s'appliquent tout de suite et sont enregistrés.
+
+| Section | Option |
+|---|---|
+| Appearance | Thème (système, clair, sombre), couleur d'accent, hauteur des lignes |
+| Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, dates relatives |
+| Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, terminal |
+
+« Reset to Defaults » remet tout à zéro. Le fichier `~/Library/Application Support/ExploRust/config` peut aussi s'éditer à la main.
+
 ## Terminal par défaut
 
 Par défaut, « Open in Terminal » utilise l'app qui ouvre les fichiers `.command` (Terminal.app sauf réglage contraire).
-Pour en changer : clic droit dans un dossier, **Open in…**, puis survole un terminal et clique **Set as Default**
+Pour en changer : choisis-le dans les réglages, ou clic droit dans un dossier, **Open in…**, puis survole un terminal et clique **Set as Default**
 (Terminal, iTerm, Ghostty, Warp, Alacritty, kitty, WezTerm… sont détectés), ou **Choose Application…** pour une autre app.
 
 Le choix est gardé dans `~/Library/Application Support/ExploRust/config` :

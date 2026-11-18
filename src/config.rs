@@ -26,6 +26,7 @@ macro_rules! choices {
                 match self { $(Self::$var => $key),+ }
             }
 
+            #[allow(dead_code)]
             pub fn label(self) -> &'static str {
                 match self { $(Self::$var => $label),+ }
             }
