@@ -10,7 +10,12 @@ use gpui::{
     anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
-use crate::{fs, text_field::TextField, theme::Theme};
+use crate::{
+    apps::{self, AppInfo},
+    fs,
+    text_field::TextField,
+    theme::Theme,
+};
 
 const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
@@ -49,6 +54,8 @@ enum MenuAction {
     Open,
     Reveal,
     CopyPath,
+    OpenWith,
+    OpenTerminal,
     Rename,
     Trash,
     NewFolder,
@@ -60,10 +67,25 @@ enum MenuEntry {
     Separator,
 }
 
+/// Apps able to open the selection, shown in the "Open With" submenu.
+struct OpenWith {
+    apps: Vec<AppInfo>,
+    default: Option<PathBuf>,
+    /// File whose type the default app applies to.
+    file: PathBuf,
+}
+
 struct ContextMenu {
     position: Point<Pixels>,
     entries: Vec<MenuEntry>,
+    /// `Some` once the submenu has been expanded.
+    open_with: Option<OpenWith>,
 }
+
+const MENU_W: f32 = 210.0;
+const MENU_ITEM_H: f32 = 24.0;
+const MENU_SEPARATOR_H: f32 = 9.0;
+const MENU_PAD: f32 = 4.0;
 
 /// A row being renamed in place.
 struct Renaming {
@@ -270,33 +292,90 @@ impl Browser {
     fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
         use MenuAction::*;
         let item = |label: &str, action| MenuEntry::Item(label.to_string().into(), action);
-        let entries = if on_item {
-            vec![
-                item("Open", Open),
-                item("Reveal in Finder", Reveal),
-                MenuEntry::Separator,
-                item("Copy Path", CopyPath),
-            ]
-            .into_iter()
-            .chain((self.selected.len() == 1).then(|| item("Rename", Rename)))
-            .chain([MenuEntry::Separator, item("Move to Trash", Trash)])
-            .collect()
+        let terminal = item(&format!("Open in {}", apps::terminal().name), OpenTerminal);
+        let selected: Vec<&fs::Entry> = self
+            .selected
+            .iter()
+            .filter_map(|&ix| self.entries.get(ix))
+            .collect();
+        let single = selected.len() == 1;
+
+        let mut entries = Vec::new();
+        if on_item {
+            entries.push(item("Open", Open));
+            if selected.iter().all(|e| !e.is_dir) {
+                entries.push(item("Open With", OpenWith));
+            }
+            entries.push(item("Reveal in Finder", Reveal));
+            if single && selected[0].is_dir {
+                entries.push(terminal);
+            }
+            entries.push(MenuEntry::Separator);
+            entries.push(item("Copy Path", CopyPath));
+            if single {
+                entries.push(item("Rename", Rename));
+            }
+            entries.push(MenuEntry::Separator);
+            entries.push(item("Move to Trash", Trash));
         } else {
             let hidden = if self.show_hidden {
                 "Hide Hidden Files"
             } else {
                 "Show Hidden Files"
             };
-            vec![
-                item("New Folder", NewFolder),
-                MenuEntry::Separator,
-                item(hidden, ToggleHidden),
-            ]
+            entries.push(item("New Folder", NewFolder));
+            entries.push(terminal);
+            entries.push(MenuEntry::Separator);
+            entries.push(item(hidden, ToggleHidden));
+        }
+        self.menu = Some(ContextMenu {
+            position,
+            entries,
+            open_with: None,
+        });
+    }
+
+    /// Expand (or collapse) the "Open With" submenu; apps are looked up on first use.
+    fn toggle_open_with(&mut self, cx: &mut Context<Self>) {
+        let Some(&ix) = self.selected.first() else {
+            return;
         };
-        self.menu = Some(ContextMenu { position, entries });
+        let Some(file) = self.entries.get(ix).map(|e| e.path.clone()) else {
+            return;
+        };
+        let Some(menu) = self.menu.as_mut() else {
+            return;
+        };
+        menu.open_with = match menu.open_with.take() {
+            Some(_) => None,
+            None => Some(OpenWith {
+                apps: apps::apps_for(&file),
+                default: apps::default_app(&file).map(|a| a.path),
+                file,
+            }),
+        };
+        cx.notify();
+    }
+
+    fn open_with_app(&mut self, app: &Path, cx: &mut Context<Self>) {
+        self.menu = None;
+        apps::open_with(&self.selected_paths(), app);
+        cx.notify();
+    }
+
+    fn set_default_app(&mut self, app: &Path, cx: &mut Context<Self>) {
+        if let Some(menu) = self.menu.take()
+            && let Some(ow) = menu.open_with
+        {
+            apps::set_default(app, &ow.file);
+        }
+        cx.notify();
     }
 
     fn run_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
+        if let MenuAction::OpenWith = action {
+            return self.toggle_open_with(cx);
+        }
         self.menu = None;
         match action {
             MenuAction::Open => self.open_selected(cx),
@@ -313,6 +392,15 @@ impl Browser {
                     .collect::<Vec<_>>()
                     .join("\n");
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            MenuAction::OpenWith => {}
+            MenuAction::OpenTerminal => {
+                // A single selected folder, else the folder being browsed.
+                let dir = match self.selected_paths().as_slice() {
+                    [p] if p.is_dir() => p.clone(),
+                    _ => self.cwd.clone(),
+                };
+                apps::open_with(&[dir], &apps::terminal().path);
             }
             MenuAction::Rename => self.begin_rename(),
             MenuAction::Trash => {
@@ -562,6 +650,30 @@ impl Render for Browser {
 impl Browser {
     fn context_menu(&self, t: Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.menu.as_ref()?;
+        let panel = |w: f32| {
+            div()
+                .w(px(w))
+                .p_1()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .rounded_lg()
+                .bg(t.bg)
+                .border_1()
+                .border_color(t.border)
+                .shadow_lg()
+        };
+
+        // Vertical offset of the "Open With" row, so the submenu lines up with it.
+        let mut open_with_y = MENU_PAD;
+        for entry in &menu.entries {
+            match entry {
+                MenuEntry::Item(_, MenuAction::OpenWith) => break,
+                MenuEntry::Item(..) => open_with_y += MENU_ITEM_H,
+                MenuEntry::Separator => open_with_y += MENU_SEPARATOR_H,
+            }
+        }
+
         let entries = menu
             .entries
             .iter()
@@ -575,19 +687,92 @@ impl Browser {
                     .into_any_element(),
                 MenuEntry::Item(label, action) => {
                     let action = *action;
+                    let expanded =
+                        matches!(action, MenuAction::OpenWith) && menu.open_with.is_some();
                     div()
                         .id(("menu-item", i))
-                        .h(px(24.0))
+                        .h(px(MENU_ITEM_H))
                         .px_3()
                         .flex()
                         .items_center()
+                        .justify_between()
                         .rounded_md()
+                        .when(expanded, |d| d.bg(t.hover))
                         .hover(|d| d.bg(t.accent).text_color(t.on_accent))
                         .on_click(cx.listener(move |this, _, _, cx| this.run_action(action, cx)))
                         .child(label.clone())
+                        .when(matches!(action, MenuAction::OpenWith), |d| d.child("›"))
                         .into_any_element()
                 }
             });
+
+        let submenu = menu.open_with.as_ref().map(|ow| {
+            let rows: Vec<_> =
+                if ow.apps.is_empty() {
+                    vec![
+                        div()
+                            .h(px(MENU_ITEM_H))
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .text_color(t.dim)
+                            .child("No application")
+                            .into_any_element(),
+                    ]
+                } else {
+                    ow.apps
+                        .iter()
+                        .enumerate()
+                        .map(|(i, app)| {
+                            let is_default = ow.default.as_ref() == Some(&app.path);
+                            let group: SharedString = format!("app-{i}").into();
+                            let (open_path, default_path) = (app.path.clone(), app.path.clone());
+                            div()
+                                .id(("app", i))
+                                .group(group.clone())
+                                .h(px(MENU_ITEM_H))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .rounded_md()
+                                .hover(|d| d.bg(t.accent).text_color(t.on_accent))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_with_app(&open_path, cx)
+                                }))
+                                .child(div().min_w_0().truncate().child(app.name.clone()))
+                                .child(if is_default {
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(11.0))
+                                        .opacity(0.6)
+                                        .child("Default")
+                                        .into_any_element()
+                                } else {
+                                    // Only revealed while the row is hovered.
+                                    div()
+                                        .id(("set-default", i))
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded_sm()
+                                        .text_size(px(11.0))
+                                        .opacity(0.0)
+                                        .group_hover(group, |s| s.opacity(1.0))
+                                        .hover(|d| d.bg(Hsla::from(t.on_accent).opacity(0.25)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.set_default_app(&default_path, cx)
+                                        }))
+                                        .child("Set as Default")
+                                        .into_any_element()
+                                })
+                                .into_any_element()
+                        })
+                        .collect()
+                };
+            panel(290.0).mt(px(open_with_y - MENU_PAD)).children(rows)
+        });
 
         Some(
             deferred(
@@ -595,23 +780,20 @@ impl Browser {
                     .position(menu.position)
                     .snap_to_window_with_margin(px(8.0))
                     .child(
+                        // One wrapper around both panels, so a click in the submenu
+                        // does not count as "outside the menu".
                         div()
                             .occlude()
-                            .w(px(210.0))
-                            .p_1()
                             .flex()
-                            .flex_col()
-                            .rounded_lg()
-                            .bg(t.bg)
-                            .border_1()
-                            .border_color(t.border)
-                            .shadow_lg()
+                            .items_start()
+                            .gap_1()
                             .text_color(t.text)
                             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                 this.menu = None;
                                 cx.notify();
                             }))
-                            .children(entries),
+                            .child(panel(MENU_W).children(entries))
+                            .children(submenu),
                     ),
             )
             .with_priority(1),

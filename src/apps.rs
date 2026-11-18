@@ -34,7 +34,9 @@ pub fn default_app(file: &Path) -> Option<AppInfo> {
 
 /// Every app able to open `file`, default first, then by name.
 pub fn apps_for(file: &Path) -> Vec<AppInfo> {
-    let Some(url) = file_url(file) else { return Vec::new() };
+    let Some(url) = file_url(file) else {
+        return Vec::new();
+    };
     let default = default_app(file).map(|a| a.path);
     let mut apps: Vec<AppInfo> = NSWorkspace::sharedWorkspace()
         .URLsForApplicationsToOpenURL(&url)
@@ -42,7 +44,8 @@ pub fn apps_for(file: &Path) -> Vec<AppInfo> {
         .filter_map(|u| AppInfo::from_url(&u))
         .collect();
     apps.sort_by_cached_key(|a| (Some(&a.path) != default.as_ref(), a.name.to_lowercase()));
-    apps.dedup_by(|a, b| a.path == b.path);
+    // Same-named copies (e.g. several Chrome builds) would just clutter the list.
+    apps.dedup_by(|a, b| a.name == b.name);
     apps
 }
 
@@ -62,7 +65,9 @@ pub fn open_with(paths: &[PathBuf], app: &Path) {
 /// Make `app` the default for files of the same type as `file`.
 /// macOS may ask the user to confirm.
 pub fn set_default(app: &Path, file: &Path) {
-    let (Some(app_url), Some(url)) = (file_url(app), file_url(file)) else { return };
+    let (Some(app_url), Some(url)) = (file_url(app), file_url(file)) else {
+        return;
+    };
     NSWorkspace::sharedWorkspace()
         .setDefaultApplicationAtURL_toOpenContentTypeOfFileAtURL_completionHandler(
             &app_url, &url, None,
@@ -85,7 +90,11 @@ mod tests {
     #[test]
     fn terminal_is_an_app_bundle() {
         let t = terminal();
-        assert!(t.path.extension().is_some_and(|e| e == "app"), "{:?}", t.path);
+        assert!(
+            t.path.extension().is_some_and(|e| e == "app"),
+            "{:?}",
+            t.path
+        );
         println!("terminal = {} ({})", t.name, t.path.display());
     }
 
@@ -96,7 +105,10 @@ mod tests {
         let apps = apps_for(&file);
         assert!(!apps.is_empty());
         println!("default = {:?}", default_app(&file).map(|a| a.name));
-        println!("apps = {:?}", apps.iter().map(|a| &a.name).collect::<Vec<_>>());
+        println!(
+            "apps = {:?}",
+            apps.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
         let _ = std::fs::remove_file(file);
     }
 }

@@ -82,8 +82,8 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | Glisser-déposer | Déplacer vers un dossier, la sidebar ou le chemin du bas |
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
-| Clic droit sur un élément | Ouvrir, révéler dans le Finder, copier le chemin, renommer, mettre à la corbeille |
-| Clic droit dans le vide | Nouveau dossier (renommé aussitôt), afficher / masquer les fichiers cachés |
+| Clic droit sur un élément | Ouvrir, révéler dans le Finder, Open With (choisir une app, ou la définir par défaut), ouvrir un dossier dans le terminal, copier le chemin, renommer, mettre à la corbeille |
+| Clic droit dans le vide | Nouveau dossier (renommé aussitôt), ouvrir le terminal ici, afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
 
 ## Problèmes courants
