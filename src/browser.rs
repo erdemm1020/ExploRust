@@ -155,7 +155,8 @@ struct ContextMenu {
     submenu: Option<Submenu>,
 }
 
-const MENU_W: f32 = 210.0;
+const MENU_MIN_W: f32 = 210.0;
+const MENU_MAX_W: f32 = 380.0;
 const MENU_ITEM_H: f32 = 24.0;
 const MENU_SEPARATOR_H: f32 = 9.0;
 
@@ -190,6 +191,8 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    /// The row of the open menu picked with the arrow keys.
+    menu_cursor: Option<usize>,
     settings_scroll: gpui::ScrollHandle,
     claude_ready: bool,
     ai: Option<claude_ui::AiPanel>,
@@ -301,6 +304,7 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            menu_cursor: None,
             settings_scroll: gpui::ScrollHandle::new(),
             claude_ready: false,
             ai: None,
@@ -622,6 +626,7 @@ impl Browser {
 
     /// Open the right-click menu: file actions on a row, folder actions elsewhere.
     fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
+        self.menu_cursor = None;
         if self.remote.is_some() {
             return self.open_remote_menu(position, on_item);
         }
@@ -895,6 +900,56 @@ impl Browser {
             }
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Keys while a context menu is open: arrows pick a row, Return runs it, Escape closes.
+    fn on_menu_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.as_ref() else {
+            return;
+        };
+        // Rows that can be picked (separators cannot).
+        let items: Vec<usize> = menu
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e, MenuEntry::Item(..)))
+            .map(|(i, _)| i)
+            .collect();
+        let at = self
+            .menu_cursor
+            .and_then(|c| items.iter().position(|&i| i == c));
+        match ev.keystroke.key.as_str() {
+            "escape" => self.menu = None,
+            "down" if !items.is_empty() => {
+                self.menu_cursor = Some(items[at.map_or(0, |a| (a + 1) % items.len())]);
+            }
+            "up" if !items.is_empty() => {
+                self.menu_cursor = Some(
+                    items[at.map_or(items.len() - 1, |a| (a + items.len() - 1) % items.len())],
+                );
+            }
+            "enter" | "right" | "space" => {
+                let action = self.menu_cursor.and_then(|c| match &menu.entries[c] {
+                    MenuEntry::Item(_, a) => Some(*a),
+                    MenuEntry::Separator => None,
+                });
+                match action {
+                    // "Right" only opens a submenu; Return and Space run anything.
+                    Some(a) if ev.keystroke.key != "right" || a.opens_submenu() => {
+                        self.menu_cursor = None;
+                        return self.run_action(a, window, cx);
+                    }
+                    _ => {}
+                }
+            }
+            "left" => {
+                if let Some(m) = self.menu.as_mut() {
+                    m.submenu = None;
+                }
+            }
+            _ => {}
+        }
         cx.notify();
     }
 
@@ -1216,6 +1271,9 @@ impl Browser {
         if self.ai.is_some() {
             return self.on_ai_key(ev, cx);
         }
+        if self.menu.is_some() {
+            return self.on_menu_key(ev, window, cx);
+        }
         if self.connect.is_some() {
             return self.on_connect_key(ev, cx);
         }
@@ -1444,13 +1502,21 @@ impl Browser {
                         .items_center()
                         .justify_between()
                         .rounded_md()
+                        .gap_2()
                         .when(expanded, |d| d.bg(t.hover))
+                        // The row picked with the arrow keys looks like a hovered one.
+                        .when(self.menu_cursor == Some(i), |d| {
+                            d.bg(t.accent).text_color(t.on_accent)
+                        })
                         .hover(|d| d.bg(t.accent).text_color(t.on_accent))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.run_action(action, window, cx)
                         }))
-                        .child(label.clone())
-                        .when(action.opens_submenu(), |d| d.child("›"))
+                        // A label that still does not fit ends with an ellipsis.
+                        .child(div().min_w_0().truncate().child(label.clone()))
+                        .when(action.opens_submenu(), |d| {
+                            d.child(div().flex_none().child("›"))
+                        })
                         .into_any_element()
                 }
             });
@@ -1585,7 +1651,7 @@ impl Browser {
                                 this.menu = None;
                                 cx.notify();
                             }))
-                            .child(panel(MENU_W).children(entries))
+                            .child(panel(menu_width(&menu.entries)).children(entries))
                             .children(submenu),
                     ),
             )
@@ -2197,6 +2263,20 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_is_as_wide_as_its_longest_label() {
+        let item = |l: &str| MenuEntry::Item(l.to_string().into(), MenuAction::Open);
+        let short = vec![item("Open"), MenuEntry::Separator, item("Rename")];
+        assert_eq!(menu_width(&short), MENU_MIN_W);
+        // The label that used to be cut off now fits.
+        let long = vec![item("New Folder"), item("Git: Open Repository on the Web")];
+        assert!(menu_width(&long) >= 31.0 * 7.2, "{}", menu_width(&long));
+        // But a menu never grows without limit: the label gets an ellipsis instead.
+        let huge = vec![item(&"x".repeat(200))];
+        assert_eq!(menu_width(&huge), MENU_MAX_W);
+        assert_eq!(menu_width(&[]), MENU_MIN_W);
+    }
+
+    #[test]
     fn default_app_comes_first_and_others_keep_their_order() {
         let list = vec![app("/A/Code.app"), app("/A/Zed.app"), app("/A/Cursor.app")];
         let ordered = with_default_first(list, Some("/A/Zed.app".into()));
@@ -2215,4 +2295,18 @@ mod tests {
         let list = vec![app("/A/Code.app"), app("/A/Zed.app")];
         assert_eq!(names(&with_default_first(list, None)), ["Code", "Zed"]);
     }
+}
+
+/// Wide enough for the longest label of the menu (about 7 pixels a letter, plus the
+/// padding and the arrow of a submenu), never narrower than a normal menu.
+fn menu_width(entries: &[MenuEntry]) -> f32 {
+    let longest = entries
+        .iter()
+        .filter_map(|e| match e {
+            MenuEntry::Item(label, _) => Some(label.chars().count()),
+            MenuEntry::Separator => None,
+        })
+        .max()
+        .unwrap_or(0);
+    (longest as f32 * 7.2 + 24.0 + 24.0 + 8.0).clamp(MENU_MIN_W, MENU_MAX_W)
 }

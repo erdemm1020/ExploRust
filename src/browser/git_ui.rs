@@ -141,9 +141,9 @@ impl Browser {
         }
         entries.push(item(
             if on_item {
-                "Git: Open on the Web"
+                "Git: Open Online"
             } else {
-                "Git: Open Repository on the Web"
+                "Git: Open Repository Online"
             },
             MenuAction::GitWeb,
         ));
