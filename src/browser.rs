@@ -11,6 +11,7 @@ use gpui::{
     svg, uniform_list,
 };
 
+mod git_ui;
 mod ops;
 mod scans;
 mod settings;
@@ -73,6 +74,10 @@ enum MenuAction {
     OpenEditor,
     OpenInChoices,
     Info,
+    GitStage,
+    GitUnstage,
+    GitDiscard,
+    GitWeb,
     Compress,
     Extract,
     Rename,
@@ -171,6 +176,10 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    git: Option<crate::git::Repo>,
+    git_scan_id: u64,
+    git_tick: u8,
+    git_slow: bool,
     dir_sizes: std::collections::HashMap<PathBuf, u64>,
     sizing: std::collections::HashSet<PathBuf>,
     size_gen: u64,
@@ -261,6 +270,10 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            git: None,
+            git_scan_id: 0,
+            git_tick: 0,
+            git_slow: false,
             dir_sizes: Default::default(),
             sizing: Default::default(),
             size_gen: 0,
@@ -350,6 +363,9 @@ impl Browser {
     /// Reload when the folder changed on disk (added, removed or renamed items).
     fn poll_changes(&mut self, cx: &mut Context<Self>) {
         self.expire_notice(cx);
+        if !self.settings_open && self.menu.is_none() {
+            self.tick_git(cx);
+        }
         let busy = self.renaming.is_some() || self.menu.is_some() || self.settings_open;
         if !self.config.live_refresh || busy || dir_mtime(&self.cwd) == self.listed_at {
             return;
@@ -400,6 +416,7 @@ impl Browser {
         self.dir_sizes.clear();
         self.sizing.clear();
         self.info = None;
+        self.git = None;
     }
 
     /// Leaving a folder leaves its search behind, like Finder.
@@ -570,6 +587,7 @@ impl Browser {
             if single {
                 entries.push(item("Rename", Rename));
             }
+            entries.extend(self.git_menu(true));
             entries.push(MenuEntry::Separator);
             entries.push(item("Move to Trash", Trash));
         } else {
@@ -584,6 +602,7 @@ impl Browser {
             entries.extend(editor);
             entries.push(terminal);
             entries.push(open_in);
+            entries.extend(self.git_menu(false));
             entries.push(MenuEntry::Separator);
             entries.push(item(hidden, ToggleHidden));
         }
@@ -810,6 +829,10 @@ impl Browser {
                 }
             }
             MenuAction::Info => self.toggle_info(cx),
+            MenuAction::GitStage => self.git_stage(true, cx),
+            MenuAction::GitUnstage => self.git_stage(false, cx),
+            MenuAction::GitDiscard => return self.git_discard(window, cx),
+            MenuAction::GitWeb => self.git_web(cx),
             MenuAction::Compress => self.compress_selection(cx),
             MenuAction::Extract => self.extract_selection(cx),
             MenuAction::Rename => self.begin_rename(),
@@ -1643,6 +1666,9 @@ impl Browser {
             .border_b_1()
             .border_color(t.border)
             .child(div().flex_1().flex().child(name))
+            .when(self.git.is_some(), |d| {
+                d.child(div().w(px(git_ui::GIT_W)).flex_none())
+            })
             .child(div().w(px(DATE_W)).flex().child(modified))
             .child(div().w(px(SIZE_W)).flex().justify_end().child(size));
 
@@ -1676,6 +1702,7 @@ impl Browser {
                                 div()
                                     .id(ix)
                                     .h(px(row_h))
+                                    .when(this.is_git_ignored(entry), |d| d.opacity(0.5))
                                     .w_full()
                                     .px_2()
                                     .flex()
@@ -1741,6 +1768,9 @@ impl Browser {
                                             .truncate()
                                             .child(entry.name.clone())
                                             .into_any_element(),
+                                    })
+                                    .when(this.git.is_some(), |d| {
+                                        d.child(this.git_cell(entry, selected, t))
                                     })
                                     .child(div().w(px(DATE_W)).truncate().text_color(dim).child(
                                         entry.modified.map_or_else(
@@ -1860,6 +1890,7 @@ impl Browser {
             .border_color(t.border)
             .child(bar)
             // A running job (bar), or a short message, or the usual count.
+            .children(self.git_status(t))
             .children(self.jobs_bar(t, cx))
             .child(
                 div().flex_none().child(

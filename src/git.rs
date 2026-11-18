@@ -36,6 +36,9 @@ impl Change {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Repo {
     pub root: PathBuf,
+    /// The folder that was scanned, as git sees it (links resolved): the paths
+    /// of its entries are `dir.join(name)`.
+    pub dir: PathBuf,
     /// Branch name, or a short commit when HEAD is detached.
     pub branch: String,
     pub ahead: u32,
@@ -137,9 +140,10 @@ pub fn scan(dir: &Path) -> Option<Repo> {
         c
     })?;
     let mut repo = parse_status(&status, &root);
+    repo.dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
 
     // Ignored entries of this folder only: one call for the names we list.
-    repo.ignored = ignored_in(dir);
+    repo.ignored = ignored_in(&repo.dir);
     Some(repo)
 }
 

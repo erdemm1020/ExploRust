@@ -21,6 +21,7 @@ impl Browser {
     /// Called from `render` when a scan was asked for (a folder was listed).
     pub(super) fn start_scans(&mut self, cx: &mut Context<Self>) {
         self.start_sizes(cx);
+        self.scan_git(cx);
     }
 
     /// Find the size of the folders of this listing, one after the other.
