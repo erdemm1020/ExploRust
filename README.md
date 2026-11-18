@@ -10,7 +10,7 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Barre de recherche : filtre le dossier courant pendant la frappe
 - Tri par colonne : clic sur l'en-tête pour trier, nouveau clic pour inverser
 - Chemin cliquable et nombre d'éléments en bas
-- Thème clair ou sombre automatique
+- Thème clair ou sombre automatique, et couleur d'accentuation du système (suivis en direct)
 - Ouverture des fichiers avec l'app par défaut
 
 ## Prérequis

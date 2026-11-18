@@ -1,4 +1,5 @@
 use gpui::{Rgba, WindowAppearance, rgb};
+use objc2_app_kit::{NSColor, NSColorSpace};
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -15,11 +16,17 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Light or dark palette to match the system, with the accent color the
+    /// user picked in System Settings.
     pub fn for_appearance(appearance: WindowAppearance) -> Self {
-        match appearance {
+        let mut theme = match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
             _ => Self::light(),
+        };
+        if let Some(accent) = system_accent() {
+            theme.accent = accent;
         }
+        theme
     }
 
     fn light() -> Self {
@@ -50,5 +57,37 @@ impl Theme {
             folder: rgb(0x3b95ec),
             file: rgb(0x636368),
         }
+    }
+}
+
+/// The system accent color, as currently resolved for light or dark.
+fn system_accent() -> Option<Rgba> {
+    let color =
+        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+    Some(Rgba {
+        r: color.redComponent() as f32,
+        g: color.greenComponent() as f32,
+        b: color.blueComponent() as f32,
+        a: 1.0,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_system_accent_color() {
+        let c = system_accent().expect("accent color");
+        println!(
+            "accent = {:.0} {:.0} {:.0}",
+            c.r * 255.0,
+            c.g * 255.0,
+            c.b * 255.0
+        );
+        assert!(
+            (0.0..=1.0).contains(&c.r) && (0.0..=1.0).contains(&c.g) && (0.0..=1.0).contains(&c.b)
+        );
+        assert!(c.b > c.r, "default accent is blue");
     }
 }
