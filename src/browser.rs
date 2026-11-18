@@ -10,7 +10,7 @@ use gpui::{
     anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
-use crate::{fs, theme::Theme};
+use crate::{fs, text_field::TextField, theme::Theme};
 
 const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
@@ -49,6 +49,7 @@ enum MenuAction {
     Open,
     Reveal,
     CopyPath,
+    Rename,
     Trash,
     NewFolder,
     ToggleHidden,
@@ -62,6 +63,12 @@ enum MenuEntry {
 struct ContextMenu {
     position: Point<Pixels>,
     entries: Vec<MenuEntry>,
+}
+
+/// A row being renamed in place.
+struct Renaming {
+    ix: usize,
+    field: TextField,
 }
 
 struct Place {
@@ -82,6 +89,7 @@ pub struct Browser {
     forward: Vec<PathBuf>,
     show_hidden: bool,
     menu: Option<ContextMenu>,
+    renaming: Option<Renaming>,
     places: Vec<Place>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
@@ -139,6 +147,7 @@ impl Browser {
             forward: Vec::new(),
             show_hidden: false,
             menu: None,
+            renaming: None,
             places,
             scroll: UniformListScrollHandle::new(),
             focus,
@@ -149,6 +158,7 @@ impl Browser {
 
     fn reload(&mut self) {
         self.menu = None;
+        self.renaming = None;
         // An unreadable folder (permissions) just shows up empty.
         self.entries = fs::read_dir(&self.cwd, self.show_hidden).unwrap_or_default();
         self.clear_selection();
@@ -266,9 +276,11 @@ impl Browser {
                 item("Reveal in Finder", Reveal),
                 MenuEntry::Separator,
                 item("Copy Path", CopyPath),
-                MenuEntry::Separator,
-                item("Move to Trash", Trash),
             ]
+            .into_iter()
+            .chain((self.selected.len() == 1).then(|| item("Rename", Rename)))
+            .chain([MenuEntry::Separator, item("Move to Trash", Trash)])
+            .collect()
         } else {
             let hidden = if self.show_hidden {
                 "Hide Hidden Files"
@@ -302,6 +314,7 @@ impl Browser {
                     .join("\n");
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
+            MenuAction::Rename => self.begin_rename(),
             MenuAction::Trash => {
                 for path in self.selected_paths() {
                     let _ = crate::trash::move_to_trash(&path);
@@ -312,12 +325,76 @@ impl Browser {
                 if let Ok(path) = fs::create_folder(&self.cwd) {
                     self.reload();
                     self.select_path(&path);
+                    self.begin_rename();
                 }
             }
             MenuAction::ToggleHidden => {
                 self.show_hidden = !self.show_hidden;
                 self.reload();
             }
+        }
+        cx.notify();
+    }
+
+    /// Start renaming the selected row, if exactly one is selected.
+    fn begin_rename(&mut self) {
+        let mut ixs = self.selected.iter();
+        if let (Some(&ix), None) = (ixs.next(), ixs.next())
+            && let Some(entry) = self.entries.get(ix)
+        {
+            self.renaming = Some(Renaming {
+                ix,
+                field: TextField::for_file_name(&entry.name),
+            });
+            self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        }
+    }
+
+    /// Apply the typed name. An invalid or taken name is dropped silently.
+    fn commit_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(r) = self.renaming.take() else {
+            return;
+        };
+        if let Some(entry) = self.entries.get(r.ix)
+            && r.field.text() != entry.name.as_ref()
+            && let Ok(new_path) = fs::rename(&entry.path, r.field.text())
+        {
+            self.reload();
+            self.select_path(&new_path);
+        }
+        cx.notify();
+    }
+
+    fn on_rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let k = &ev.keystroke;
+        let (cmd, shift) = (k.modifiers.platform, k.modifiers.shift);
+        let Some(r) = self.renaming.as_mut() else {
+            return;
+        };
+        let f = &mut r.field;
+        match k.key.as_str() {
+            "enter" => return self.commit_rename(cx),
+            "escape" => self.renaming = None,
+            "backspace" => f.backspace(),
+            "delete" => f.delete(),
+            "left" if cmd => f.home(shift),
+            "right" if cmd => f.end(shift),
+            "left" => f.left(shift),
+            "right" => f.right(shift),
+            "a" if cmd => f.select_all(),
+            "v" if cmd => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                    f.insert(&text.replace(['\n', '/'], " "));
+                }
+            }
+            _ if !cmd && !k.modifiers.control => {
+                if let Some(ch) = k.key_char.as_deref()
+                    && !ch.chars().any(char::is_control)
+                {
+                    f.insert(ch);
+                }
+            }
+            _ => {}
         }
         cx.notify();
     }
@@ -385,14 +462,21 @@ impl Browser {
     }
 
     fn on_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.renaming.is_some() {
+            return self.on_rename_key(ev, cx);
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform;
         match k.key.as_str() {
             "up" if cmd => self.go_up(cx),
-            "down" if cmd => self.open_selected(cx),
+            "down" | "o" if cmd => self.open_selected(cx),
             "up" => self.move_selection(-1, k.modifiers.shift, cx),
             "down" => self.move_selection(1, k.modifiers.shift, cx),
-            "enter" => self.open_selected(cx),
+            // Like Finder: Return renames, ⌘O / ⌘↓ opens.
+            "enter" => {
+                self.begin_rename();
+                cx.notify();
+            }
             "a" if cmd => {
                 self.select_all();
                 cx.notify();
@@ -439,6 +523,13 @@ impl Render for Browser {
             .id("root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev, _, cx| this.on_key(ev, cx)))
+            // A click anywhere while renaming applies the new name and nothing else.
+            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                if this.renaming.is_some() {
+                    this.commit_rename(cx);
+                    cx.stop_propagation();
+                }
+            }))
             // Side mouse buttons: back / forward.
             .on_mouse_up(
                 MouseButton::Navigate(NavigationDirection::Back),
@@ -703,13 +794,15 @@ impl Browser {
                                         Self::drop_target(d, entry.path.clone(), t, cx)
                                     })
                                     .child(icon)
-                                    .child(
-                                        div()
+                                    .child(match this.renaming.as_ref().filter(|r| r.ix == ix) {
+                                        Some(r) => rename_input(&r.field, t).into_any_element(),
+                                        None => div()
                                             .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .child(entry.name.clone()),
-                                    )
+                                            .child(entry.name.clone())
+                                            .into_any_element(),
+                                    })
                                     .child(
                                         div()
                                             .w(px(90.0))
@@ -841,4 +934,35 @@ fn entry_icon(entry: &fs::Entry, t: Theme) -> gpui::Svg {
         _ => "icons/file.svg",
     };
     icon(name, t.file)
+}
+
+/// The text box shown in place of a name while renaming.
+fn rename_input(field: &TextField, t: Theme) -> impl IntoElement {
+    let text = field.text();
+    let (start, end) = field.selection();
+    let caret = || div().w(px(1.0)).h(px(15.0)).flex_none().bg(t.accent);
+
+    div()
+        .flex_1()
+        .min_w_0()
+        .h(px(22.0))
+        .px_1()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .rounded_sm()
+        .bg(t.bg)
+        .text_color(t.text)
+        .border_1()
+        .border_color(t.accent)
+        .child(text[..start].to_string())
+        .when(field.cursor() == start, |d| d.child(caret()))
+        .child(
+            div()
+                .bg(Hsla::from(t.accent).opacity(0.3))
+                .child(text[start..end].to_string()),
+        )
+        .when(field.cursor() == end && start != end, |d| d.child(caret()))
+        .child(text[end..].to_string())
 }
