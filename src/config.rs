@@ -114,6 +114,10 @@ pub struct Config {
     /// Start in the folder that was open last time.
     pub reopen_last: bool,
     pub last_folder: Option<PathBuf>,
+    /// Look for a new version when the app starts.
+    pub check_updates: bool,
+    /// A version the user chose not to be asked about again.
+    pub skipped_version: Option<String>,
     /// Terminal app chosen by the user (`None`: use the system one).
     pub terminal: Option<PathBuf>,
 }
@@ -133,6 +137,8 @@ impl Default for Config {
             show_hidden: false,
             reopen_last: false,
             last_folder: None,
+            check_updates: true,
+            skipped_version: None,
             terminal: None,
         }
     }
@@ -184,6 +190,10 @@ impl Config {
                 "live_refresh" => c.live_refresh = flag(value).unwrap_or(c.live_refresh),
                 "relative_dates" => c.relative_dates = flag(value).unwrap_or(c.relative_dates),
                 "show_hidden" => c.show_hidden = flag(value).unwrap_or(c.show_hidden),
+                "check_updates" => c.check_updates = flag(value).unwrap_or(c.check_updates),
+                "skipped_version" => {
+                    c.skipped_version = (!value.is_empty()).then(|| value.to_string())
+                }
                 "reopen_last" => c.reopen_last = flag(value).unwrap_or(c.reopen_last),
                 "trash_warning" => match value {
                     "off" => c.trash_warning = None,
@@ -202,7 +212,7 @@ impl Config {
         let mut out = format!(
             "theme = {}\naccent = {}\ndensity = {}\nnatural_sort = {}\nfolders_on_top = {}\n\
              single_click = {}\nlive_refresh = {}\nrelative_dates = {}\nshow_hidden = {}\n\
-             reopen_last = {}\ntrash_warning = {}\n",
+             reopen_last = {}\ncheck_updates = {}\ntrash_warning = {}\n",
             self.theme.key(),
             self.accent.key(),
             self.density.key(),
@@ -213,6 +223,7 @@ impl Config {
             flag(self.relative_dates),
             flag(self.show_hidden),
             flag(self.reopen_last),
+            flag(self.check_updates),
             self.trash_warning
                 .map_or("off".to_string(), |n| n.to_string()),
         );
@@ -223,6 +234,9 @@ impl Config {
             if let Some(p) = value {
                 out.push_str(&format!("{key} = {}\n", p.display()));
             }
+        }
+        if let Some(v) = &self.skipped_version {
+            out.push_str(&format!("skipped_version = {v}\n"));
         }
         out
     }
@@ -253,6 +267,8 @@ mod tests {
             show_hidden: true,
             reopen_last: true,
             last_folder: Some("/Users/me/My Docs".into()),
+            check_updates: false,
+            skipped_version: Some("0.3.0".into()),
             terminal: Some("/Applications/Ghostty.app".into()),
         };
         assert_eq!(Config::parse(&c.render()), c);

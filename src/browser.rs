@@ -11,6 +11,7 @@ use gpui::{
 };
 
 mod settings;
+mod updates;
 
 use crate::{
     apps::{self, AppInfo},
@@ -147,6 +148,7 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    update: updates::UpdateState,
     /// Terminal apps found when the settings page was opened.
     terminals: Vec<AppInfo>,
     /// Modification time of the folder when it was listed, to spot changes.
@@ -223,6 +225,7 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            update: updates::UpdateState::Idle,
             terminals: Vec::new(),
             listed_at: None,
             config,
@@ -232,6 +235,20 @@ impl Browser {
             focus,
         };
         this.reload();
+
+        // Look for a new version a few seconds after start, off the critical path.
+        if this.config.check_updates {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
+                this.update_in(cx, |this, window, cx| {
+                    this.check_for_updates(false, window, cx)
+                })
+                .ok();
+            })
+            .detach();
+        }
 
         // Live refresh: look at the folder once a second (one `stat`, no watcher).
         cx.spawn(async move |this, cx| {
@@ -1627,6 +1644,10 @@ impl Browser {
         }
 
         let count = self.entries.len();
+        let installing = match &self.update {
+            updates::UpdateState::Installing(v) => Some(format!("Installing version {v}…")),
+            _ => None,
+        };
         let status = match self.selected.len() {
             0 if !self.query.is_empty() => match count {
                 1 => "1 result".to_string(),
@@ -1648,7 +1669,7 @@ impl Browser {
             .border_t_1()
             .border_color(t.border)
             .child(bar)
-            .child(div().flex_none().child(status))
+            .child(div().flex_none().child(installing.unwrap_or(status)))
     }
 }
 

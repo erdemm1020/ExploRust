@@ -249,13 +249,20 @@ impl Browser {
                             .child(section(t, "Appearance", appearance))
                             .child(section(t, "Files", files))
                             .child(section(t, "Behavior", behavior))
+                            .child(section(t, "Updates", self.update_rows(t, cx)))
                             .child(reset),
                     ),
             )
     }
 
     /// A line of the page: title and hint on the left, the control on the right.
-    fn row(&self, t: Theme, title: &str, hint: &str, control: impl IntoElement) -> AnyElement {
+    pub(super) fn row(
+        &self,
+        t: Theme,
+        title: &str,
+        hint: &str,
+        control: impl IntoElement,
+    ) -> AnyElement {
         div()
             .px_4()
             .py_3()
@@ -282,7 +289,7 @@ impl Browser {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn switch_row(
+    pub(super) fn switch_row(
         &self,
         t: Theme,
         id: &'static str,

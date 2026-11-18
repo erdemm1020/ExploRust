@@ -393,4 +393,201 @@ mod tests {
             None
         );
     }
+
+    // --- The whole install, against a local server and a real DMG (no UI involved). ---
+
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("explorust-upd-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A minimal, validly signed `ExploRust.app` of the given version, inside `dir`.
+    fn make_app(dir: &Path, version: &str) -> PathBuf {
+        let app = dir.join("ExploRust.app");
+        fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        fs::write(
+            app.join("Contents/Info.plist"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+                 <key>CFBundleExecutable</key><string>ExploRust</string>\
+                 <key>CFBundleIdentifier</key><string>app.explorust.test</string>\
+                 <key>CFBundlePackageType</key><string>APPL</string>\
+                 <key>CFBundleShortVersionString</key><string>{version}</string>\
+                 </dict></plist>"
+            ),
+        )
+        .unwrap();
+        // Any real executable will do for the test.
+        fs::copy("/usr/bin/true", app.join("Contents/MacOS/ExploRust")).unwrap();
+        run(
+            Command::new("/usr/bin/codesign")
+                .args(["--force", "--deep", "--sign", "-"])
+                .arg(&app),
+            "signing the test app",
+        )
+        .unwrap();
+        app
+    }
+
+    fn make_dmg(from: &Path, to: &Path) {
+        run(
+            Command::new("/usr/bin/hdiutil")
+                .args(["create", "-volname", "ExploRust", "-srcfolder"])
+                .arg(from)
+                .args(["-ov", "-format", "UDZO"])
+                .arg(to),
+            "making the test DMG",
+        )
+        .unwrap();
+    }
+
+    /// Serves `files` ("/name" -> bytes) on 127.0.0.1 and returns the port.
+    fn serve(files: Vec<(&'static str, Vec<u8>)>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = files
+                    .iter()
+                    .find(|(p, _)| *p == path)
+                    .map(|(_, b)| b.clone());
+                let (status, body) = match body {
+                    Some(b) => ("200 OK", b),
+                    None => ("404 Not Found", Vec::new()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        port
+    }
+
+    fn version_of(app: &Path) -> String {
+        run(
+            Command::new("/usr/libexec/PlistBuddy")
+                .arg("-c")
+                .arg("Print :CFBundleShortVersionString")
+                .arg(app.join("Contents/Info.plist")),
+            "reading a version",
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    }
+
+    /// An installed old app, plus a release (`version`) served locally whose
+    /// checksum file says `checksum` (None: the right one).
+    fn setup(name: &str, version: &str, checksum: Option<&str>) -> (PathBuf, PathBuf, Release) {
+        let root = scratch(name);
+        let installed = root.join("Applications");
+        fs::create_dir_all(&installed).unwrap();
+        let old = make_app(&installed, "0.0.1");
+
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        make_app(&source, version);
+        let dmg = root.join("ExploRust.dmg");
+        make_dmg(&source, &dmg);
+        let hash = checksum.map_or_else(|| sha256_of(&dmg).unwrap(), str::to_string);
+
+        let port = serve(vec![
+            ("/update.dmg", fs::read(&dmg).unwrap()),
+            (
+                "/update.dmg.sha256",
+                format!("{hash}  update.dmg\n").into_bytes(),
+            ),
+        ]);
+        let release = Release {
+            version: version.to_string(),
+            notes: String::new(),
+            page_url: String::new(),
+            dmg_url: format!("http://127.0.0.1:{port}/update.dmg"),
+            checksum_url: format!("http://127.0.0.1:{port}/update.dmg.sha256"),
+        };
+        (root, old, release)
+    }
+
+    /// Is nothing under `root` still mounted?
+    fn no_mount_left(root: &Path) -> bool {
+        let mounts = run(&mut Command::new("/sbin/mount"), "listing mounts").unwrap();
+        // `/var` is a symlink to `/private/var`: mount lists the real path.
+        let real = fs::canonicalize(root).unwrap();
+        !mounts.contains(real.to_str().unwrap())
+    }
+
+    #[test]
+    fn installs_a_new_version_from_a_dmg() {
+        let (root, old, release) = setup("ok", "9.9.9", None);
+        assert_eq!(version_of(&old), "0.0.1");
+
+        let work = root.join("work");
+        fs::create_dir_all(&work).unwrap();
+        let installed = install_in(&release, &old, old.parent().unwrap(), &work).unwrap();
+
+        assert_eq!(installed, old);
+        assert_eq!(version_of(&old), "9.9.9");
+        // Nothing is left beside the app, and the DMG is no longer mounted.
+        let leftovers: Vec<_> = fs::read_dir(old.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, ["ExploRust.app"]);
+        assert!(no_mount_left(&root));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_corrupted_download_leaves_the_app_alone() {
+        let (root, old, release) = setup("bad-sum", "9.9.9", Some(&"0".repeat(64)));
+        let work = root.join("work");
+        fs::create_dir_all(&work).unwrap();
+        let err = install_in(&release, &old, old.parent().unwrap(), &work).unwrap_err();
+        assert!(err.contains("corrupted"), "{err}");
+        assert_eq!(version_of(&old), "0.0.1");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_dmg_with_the_wrong_version_is_refused() {
+        // The release says 9.9.9 but the DMG holds 1.2.3.
+        let (root, old, mut release) = setup("wrong-version", "1.2.3", None);
+        release.version = "9.9.9".into();
+        let work = root.join("work");
+        fs::create_dir_all(&work).unwrap();
+        let err = install_in(&release, &old, old.parent().unwrap(), &work).unwrap_err();
+        assert!(err.contains("1.2.3"), "{err}");
+        assert_eq!(version_of(&old), "0.0.1");
+        // The staged copy is cleaned up too.
+        assert!(!old.parent().unwrap().join(".ExploRust-update.app").exists());
+        assert!(no_mount_left(&root));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_download_is_an_error() {
+        let (root, old, mut release) = setup("missing", "9.9.9", None);
+        release.dmg_url = release.dmg_url.replace("update.dmg", "nope.dmg");
+        let work = root.join("work");
+        fs::create_dir_all(&work).unwrap();
+        assert!(install_in(&release, &old, old.parent().unwrap(), &work).is_err());
+        assert_eq!(version_of(&old), "0.0.1");
+        let _ = fs::remove_dir_all(root);
+    }
 }
