@@ -2,6 +2,7 @@ mod apps;
 mod archive;
 mod assets;
 mod browser;
+mod claude;
 mod clipboard;
 mod config;
 mod dates;
