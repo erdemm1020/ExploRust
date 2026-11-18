@@ -128,6 +128,32 @@ pub fn create_folder(dir: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Number of items inside `dir`, subfolders included. Stops counting once it
+/// passes `limit`, so a huge folder costs no more than a small one.
+pub fn count_items(dir: &Path, limit: usize) -> usize {
+    fn walk(dir: &Path, limit: usize, count: &mut usize) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            *count += 1;
+            if *count > limit {
+                return;
+            }
+            // `file_type` does not follow symlinks: no loops, no escaping the folder.
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                walk(&entry.path(), limit, count);
+                if *count > limit {
+                    return;
+                }
+            }
+        }
+    }
+    let mut count = 0;
+    walk(dir, limit, &mut count);
+    count
+}
+
 /// Create an empty file named "untitled file" (numbered if taken).
 pub fn create_file(dir: &Path) -> io::Result<PathBuf> {
     let path = unique_path(dir, std::ffi::OsStr::new("untitled file"));
@@ -238,6 +264,18 @@ mod tests {
             create_folder(&root).unwrap(),
             root.join("untitled folder 2")
         );
+    }
+
+    #[test]
+    fn counts_items_recursively_and_stops_at_limit() {
+        let root = scratch("count");
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        for f in ["x", "a/y", "a/b/z"] {
+            fs::write(root.join(f), "").unwrap();
+        }
+        // x, a, a/y, a/b, a/b/z
+        assert_eq!(count_items(&root, 100), 5);
+        assert!(count_items(&root, 2) > 2);
     }
 
     #[test]

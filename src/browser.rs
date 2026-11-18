@@ -6,8 +6,8 @@ use std::{
 use gpui::{
     ClickEvent, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Hsla, IntoElement,
     KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, NavigationDirection, PathPromptOptions,
-    Pixels, Point, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
-    WindowControlArea, anchored, deferred, div, prelude::*, px, svg, uniform_list,
+    Pixels, Point, PromptLevel, Render, ScrollStrategy, SharedString, UniformListScrollHandle,
+    Window, WindowControlArea, anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
 use crate::{
@@ -106,6 +106,9 @@ struct ContextMenu {
     /// `Some` once a submenu has been expanded.
     submenu: Option<Submenu>,
 }
+
+/// A folder with more items than this asks for confirmation before going to the Trash.
+const BIG_FOLDER: usize = 100;
 
 const MENU_W: f32 = 210.0;
 const MENU_ITEM_H: f32 = 24.0;
@@ -506,7 +509,7 @@ impl Browser {
         cx.notify();
     }
 
-    fn run_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
+    fn run_action(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             MenuAction::OpenWith => return self.toggle_submenu(SubmenuKind::Files, cx),
             MenuAction::TerminalChoices => {
@@ -533,12 +536,7 @@ impl Browser {
                 apps::open_with(&[self.target_dir()], &self.terminal().path)
             }
             MenuAction::Rename => self.begin_rename(),
-            MenuAction::Trash => {
-                for path in self.selected_paths() {
-                    let _ = crate::trash::move_to_trash(&path);
-                }
-                self.reload();
-            }
+            MenuAction::Trash => return self.trash_selection(window, cx),
             MenuAction::NewFolder => self.create_item(fs::create_folder),
             MenuAction::NewFile => self.create_item(fs::create_file),
             MenuAction::ToggleHidden => {
@@ -556,6 +554,56 @@ impl Browser {
             self.select_path(&path);
             self.begin_rename();
         }
+    }
+
+    /// ⌘⌫: move the selection to the Trash. A big folder asks first.
+    fn trash_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = self.selected_paths();
+        let big: Vec<String> = paths
+            .iter()
+            .filter(|p| p.is_dir() && fs::count_items(p, BIG_FOLDER) > BIG_FOLDER)
+            .filter_map(|p| p.file_name())
+            .map(|n| format!("“{}”", n.to_string_lossy()))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        if big.is_empty() {
+            return self.trash_paths(&paths, cx);
+        }
+
+        let message = match paths.as_slice() {
+            [_] => format!("Move {} to the Trash?", big[0]),
+            all => format!("Move these {} items to the Trash?", all.len()),
+        };
+        let detail = format!(
+            "{} contain{} more than {BIG_FOLDER} items. You can get them back from the Trash.",
+            big.join(", "),
+            if big.len() == 1 { "s" } else { "" },
+        );
+        // "Cancel" comes first so it is the button Return would press.
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some(&detail),
+            &["Cancel", "Move to Trash"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if let Ok(1) = answer.await {
+                this.update(cx, |this, cx| this.trash_paths(&paths, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn trash_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            let _ = crate::trash::move_to_trash(path);
+        }
+        self.reload();
+        cx.notify();
     }
 
     /// Start renaming the selected row, if exactly one is selected.
@@ -731,7 +779,7 @@ impl Browser {
         cx.notify();
     }
 
-    fn on_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.renaming.is_some() {
             return self.on_rename_key(ev, cx);
         }
@@ -755,6 +803,7 @@ impl Browser {
                 self.create_item(fs::create_folder);
                 cx.notify();
             }
+            "backspace" if cmd => self.trash_selection(window, cx),
             // ⌘⌥C copies the path as text, like Finder.
             "c" if cmd && k.modifiers.alt => self.copy_selection_path(cx),
             "c" if cmd => self.copy_selection(),
@@ -805,7 +854,7 @@ impl Render for Browser {
         div()
             .id("root")
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, ev, _, cx| this.on_key(ev, cx)))
+            .on_key_down(cx.listener(|this, ev, window, cx| this.on_key(ev, window, cx)))
             // A click anywhere while renaming applies the new name and nothing else.
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
                 if this.renaming.is_some() {
@@ -897,7 +946,9 @@ impl Browser {
                         .rounded_md()
                         .when(expanded, |d| d.bg(t.hover))
                         .hover(|d| d.bg(t.accent).text_color(t.on_accent))
-                        .on_click(cx.listener(move |this, _, _, cx| this.run_action(action, cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.run_action(action, window, cx)
+                        }))
                         .child(label.clone())
                         .when(action.opens_submenu(), |d| d.child("›"))
                         .into_any_element()

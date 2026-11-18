@@ -73,6 +73,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⇧` + clic | Sélectionner une plage |
 | `⌘` + clic | Ajouter / retirer un élément de la sélection |
 | `⌘⇧N` | Nouveau dossier (renommé aussitôt) |
+| `⌘⌫` | Mettre la sélection à la corbeille (confirmation si un dossier contient plus de 100 éléments) |
 | `⌘A` | Tout sélectionner |
 | `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
 | `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |
