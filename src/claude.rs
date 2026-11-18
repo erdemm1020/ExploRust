@@ -32,6 +32,11 @@ impl ClaudeModel {
 
 /// The saved API key, if any.
 pub fn api_key() -> Option<String> {
+    // Debug builds can take it from the environment (to try the window without a real key).
+    #[cfg(debug_assertions)]
+    if let Ok(key) = std::env::var("EXPLORUST_CLAUDE_KEY") {
+        return Some(key);
+    }
     keychain_get(KEYCHAIN_SERVICE)
 }
 

@@ -12,6 +12,14 @@ impl Browser {
             // Looked up once here, not at every repaint.
             self.terminals = apps::installed_terminals();
             self.editors = apps::installed_editors();
+            // Debug builds: start scrolled down, to look at the lower sections.
+            #[cfg(debug_assertions)]
+            if let Some(px_down) = std::env::var("EXPLORUST_SETTINGS_SCROLL")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+            {
+                self.settings_scroll.set_offset(gpui::point(px(0.0), px(-px_down)));
+            }
         }
         cx.notify();
     }
@@ -92,7 +100,7 @@ impl Browser {
                 t,
                 "folder-sizes",
                 "Folder sizes",
-                "Show how much space folders take (found out in the background).",
+                "Show the space folders take (found out in the background).",
                 c.folder_sizes,
                 |c, v| c.folder_sizes = v,
                 cx,
@@ -140,7 +148,7 @@ impl Browser {
             t,
             "dev-tools",
             "Developer tools",
-            "Git, project commands, servers and Claude. Turn this off if you do not code.",
+            "Git, projects, servers, Claude. Turn off if you do not code.",
             c.dev_tools,
             |c, v| c.dev_tools = v,
             cx,
@@ -151,7 +159,7 @@ impl Browser {
                     t,
                     "git",
                     "Git",
-                    "Badges on changed files, the branch in the status bar, Stage and Discard in the menu.",
+                    "Badges on changed files, branch in the status bar, menu actions.",
                     c.git,
                     |c, v| c.git = v,
                     cx,
@@ -160,7 +168,7 @@ impl Browser {
                     t,
                     "git-dim",
                     "Dim ignored files",
-                    "Files and folders that .gitignore leaves out are shown fainter.",
+                    "Files that .gitignore leaves out look fainter.",
                     c.git_dim_ignored,
                     |c, v| c.git_dim_ignored = v,
                     cx,
@@ -169,7 +177,7 @@ impl Browser {
                     t,
                     "projects",
                     "Project folders",
-                    "A tag on Rust, Node, Go… folders, and their commands (run, build, test) in the menu.",
+                    "A tag on project folders, and their commands in the menu.",
                     c.project_detect,
                     |c, v| c.project_detect = v,
                     cx,
@@ -178,7 +186,7 @@ impl Browser {
                     t,
                     "ssh",
                     "Servers (SSH)",
-                    "Browse servers like folders (⌘K). Uses your ssh keys.",
+                    "Browse servers like folders (⌘K), with your ssh keys.",
                     c.ssh,
                     |c, v| c.ssh = v,
                     cx,
@@ -187,7 +195,7 @@ impl Browser {
                     t,
                     "claude",
                     "Claude",
-                    "Ask Claude about a file or a folder. Sends what you choose to Anthropic, only when you ask.",
+                    "Ask about a file or folder. It is sent to Anthropic only when you ask.",
                     c.claude,
                     |c, v| c.claude = v,
                     cx,
@@ -195,7 +203,7 @@ impl Browser {
             ]);
             if c.claude {
                 developer.push(
-                    self.row(
+                    self.row_stacked(
                         t,
                         "Claude model",
                         "Opus is the most capable, Haiku the fastest and cheapest.",
@@ -212,13 +220,13 @@ impl Browser {
                         ),
                     ),
                 );
-                developer.push(self.row(
+                developer.push(self.row_stacked(
                     t,
                     "API key",
                     if self.claude_ready {
                         "Saved in your Keychain."
                     } else {
-                        "Copy your key (sk-ant-…) then save it from the clipboard. It goes to the Keychain."
+                        "Copy your sk-ant key, then save it. It goes to the Keychain."
                     },
                     self.key_buttons(t, cx),
                 ));
@@ -271,10 +279,10 @@ impl Browser {
                     cx,
                 ),
             ),
-            self.row(
+            self.row_stacked(
                 t,
                 "Editor",
-                "Used by “Open in …”. Auto picks the first one found.",
+                "Used by “Open in …”. Auto uses the first one found.",
                 self.segmented(
                     t,
                     "editor",
@@ -284,7 +292,7 @@ impl Browser {
                     cx,
                 ),
             ),
-            self.row(
+            self.row_stacked(
                 t,
                 "Terminal",
                 "Used by “Open in Terminal”.",
@@ -360,6 +368,7 @@ impl Browser {
             .child(
                 div()
                     .id("settings-scroll")
+                    .track_scroll(&self.settings_scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -424,6 +433,38 @@ impl Browser {
                     ),
             )
             .child(div().flex_none().child(control))
+            .into_any_element()
+    }
+
+    /// Like `row`, with the control under the text: for controls too wide to sit beside it.
+    pub(super) fn row_stacked(
+        &self,
+        t: Theme,
+        title: &str,
+        hint: &str,
+        control: impl IntoElement,
+    ) -> AnyElement {
+        div()
+            .px_4()
+            .py_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(title.to_string())
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(t.dim)
+                            .child(hint.to_string()),
+                    ),
+            )
+            // `flex`: the control keeps its own width instead of stretching.
+            .child(div().flex().child(control))
             .into_any_element()
     }
 
@@ -558,6 +599,7 @@ fn section(t: Theme, title: &str, rows: Vec<AnyElement>) -> impl IntoElement {
         )
         .child(
             div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .rounded_lg()
@@ -566,6 +608,7 @@ fn section(t: Theme, title: &str, rows: Vec<AnyElement>) -> impl IntoElement {
                 .overflow_hidden()
                 .children(rows.into_iter().enumerate().map(|(i, row)| {
                     div()
+                        .w_full()
                         .when(i > 0, |d| d.border_t_1().border_color(t.border))
                         .child(row)
                 })),

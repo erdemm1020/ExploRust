@@ -190,6 +190,7 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    settings_scroll: gpui::ScrollHandle,
     claude_ready: bool,
     ai: Option<claude_ui::AiPanel>,
     /// The server whose folder is shown (`cwd` is then a path on that server).
@@ -300,6 +301,7 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            settings_scroll: gpui::ScrollHandle::new(),
             claude_ready: false,
             ai: None,
             remote: None,
@@ -340,6 +342,11 @@ impl Browser {
 
         if this.config.claude {
             this.check_claude_key(cx);
+        }
+
+        // `ExploRust --settings` opens the settings page.
+        if std::env::args().any(|a| a == "--settings") {
+            this.toggle_settings(cx);
         }
 
         // `ExploRust ssh://host/folder` opens a server straight away.
