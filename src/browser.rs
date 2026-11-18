@@ -71,6 +71,8 @@ enum MenuAction {
     OpenTerminal,
     OpenEditor,
     OpenInChoices,
+    Compress,
+    Extract,
     Rename,
     Trash,
     NewFolder,
@@ -525,6 +527,16 @@ impl Browser {
             if single && selected[0].is_dir {
                 entries.extend(paste);
             }
+            entries.push(item(
+                &match selected.len() {
+                    1 => "Compress".to_string(),
+                    n => format!("Compress {n} Items"),
+                },
+                Compress,
+            ));
+            if single && crate::archive::is_archive(&selected[0].path) {
+                entries.push(item("Extract", Extract));
+            }
             if single {
                 entries.push(item("Rename", Rename));
             }
@@ -767,6 +779,8 @@ impl Browser {
                     apps::open_with(&self.editor_targets(), &editor.path);
                 }
             }
+            MenuAction::Compress => self.compress_selection(cx),
+            MenuAction::Extract => self.extract_selection(cx),
             MenuAction::Rename => self.begin_rename(),
             MenuAction::Trash => return self.trash_selection(window, cx),
             MenuAction::NewFolder => self.create_item(fs::create_folder),

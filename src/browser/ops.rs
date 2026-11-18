@@ -178,6 +178,98 @@ impl Browser {
         cx.notify();
     }
 
+    /// Run `work` in the background as a job with a progress bar. It makes one new
+    /// item (a zip, an extracted folder); that item is selected and the creation can be undone.
+    fn run_job(
+        &mut self,
+        label: String,
+        undo_label: &'static str,
+        work: impl FnOnce(&Progress) -> Result<PathBuf, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let progress = Arc::new(Progress::default());
+        let id = self.next_job;
+        self.next_job += 1;
+        self.jobs.push(RunningJob {
+            id,
+            label,
+            progress: progress.clone(),
+        });
+        cx.notify();
+
+        let ticking = progress.clone();
+        cx.spawn(async move |this, cx| {
+            while !ticking.is_finished() {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |this, cx| {
+            let p = progress.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { work(&p) })
+                .await;
+            progress.finish();
+            this.update(cx, |this, cx| {
+                this.jobs.retain(|j| j.id != id);
+                match result {
+                    Ok(created) => {
+                        this.undo
+                            .record(undo_label, UndoOp::Trash(vec![created.clone()]));
+                        this.reload();
+                        this.select_paths(&[created]);
+                    }
+                    Err(e) if e == "cancelled" => this.say_in_status("Cancelled", cx),
+                    Err(e) => this.say_in_status(format!("Failed: {e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Zip the selection.
+    pub(super) fn compress_selection(&mut self, cx: &mut Context<Self>) {
+        let items = self.selected_paths();
+        if items.is_empty() {
+            return;
+        }
+        let dir = self.cwd.clone();
+        let label = match items.as_slice() {
+            [_] => "Compressing…".to_string(),
+            many => format!("Compressing {} items…", many.len()),
+        };
+        self.run_job(
+            label,
+            "Compress",
+            move |p| crate::archive::compress(&items, &dir, p),
+            cx,
+        );
+    }
+
+    /// Unpack the selected archive next to itself.
+    pub(super) fn extract_selection(&mut self, cx: &mut Context<Self>) {
+        if let [archive] = self.selected_paths().as_slice()
+            && crate::archive::is_archive(archive)
+        {
+            let archive = archive.clone();
+            self.run_job(
+                "Extracting…".into(),
+                "Extract",
+                move |p| crate::archive::extract(&archive, p),
+                cx,
+            );
+        }
+    }
+
     /// ⌘Z.
     pub(super) fn undo_last(&mut self, cx: &mut Context<Self>) {
         let outcome = self.undo.undo();
