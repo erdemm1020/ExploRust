@@ -14,13 +14,16 @@ use crate::{
     apps::{self, AppInfo},
     clipboard,
     config::Config,
-    fs,
+    dates::DateFormat,
+    fs::{self, Sort, SortKey},
     text_field::TextField,
     theme::Theme,
 };
 
 const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
+const DATE_W: f32 = 170.0;
+const SIZE_W: f32 = 90.0;
 const SIDEBAR_W: f32 = 180.0;
 
 /// What is being dragged out of the list: the paths of the dragged rows.
@@ -137,6 +140,8 @@ pub struct Browser {
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     show_hidden: bool,
+    sort: Sort,
+    dates: DateFormat,
     menu: Option<ContextMenu>,
     config: Config,
     renaming: Option<Renaming>,
@@ -196,6 +201,8 @@ impl Browser {
             back: Vec::new(),
             forward: Vec::new(),
             show_hidden: false,
+            sort: Sort::by(SortKey::Name),
+            dates: DateFormat::new(),
             menu: None,
             config: Config::load(),
             renaming: None,
@@ -207,11 +214,21 @@ impl Browser {
         this
     }
 
+    /// A click on a column header: sort by it, or flip the direction.
+    fn set_sort(&mut self, key: SortKey, cx: &mut Context<Self>) {
+        let keep = self.selected_paths();
+        self.sort = self.sort.clicked(key);
+        fs::sort_entries(&mut self.entries, self.sort);
+        // Rows moved: find the selected items again.
+        self.select_paths(&keep);
+        cx.notify();
+    }
+
     fn reload(&mut self) {
         self.menu = None;
         self.renaming = None;
         // An unreadable folder (permissions) just shows up empty.
-        self.entries = fs::read_dir(&self.cwd, self.show_hidden).unwrap_or_default();
+        self.entries = fs::read_dir(&self.cwd, self.show_hidden, self.sort).unwrap_or_default();
         self.clear_selection();
     }
 
@@ -1152,18 +1169,52 @@ impl Browser {
     }
 
     fn list(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let sort = self.sort;
+        let column = |id: &'static str, key: SortKey, label: &'static str| {
+            let active = sort.key == key;
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .when(active, |d| d.text_color(t.text))
+                .hover(|d| d.text_color(t.text))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_sort(key, cx)))
+                .child(label)
+                .when(active, |d| {
+                    let arrow = if sort.ascending {
+                        "icons/sort-asc.svg"
+                    } else {
+                        "icons/sort-desc.svg"
+                    };
+                    d.child(
+                        svg()
+                            .path(arrow)
+                            .size(px(9.0))
+                            .flex_none()
+                            .text_color(t.text),
+                    )
+                })
+        };
+        let name = column("sort-name", SortKey::Name, "Name");
+        let modified = column("sort-modified", SortKey::Modified, "Date Modified");
+        let size = column("sort-size", SortKey::Size, "Size");
+
         let header = div()
             .h(px(24.0))
             .flex_none()
             .px_4()
             .flex()
             .items_center()
+            .gap_2()
             .text_size(px(12.0))
             .text_color(t.dim)
             .border_b_1()
             .border_color(t.border)
-            .child(div().flex_1().child("Name"))
-            .child(div().w(px(90.0)).text_right().child("Size"));
+            .child(div().flex_1().flex().child(name))
+            .child(div().w(px(DATE_W)).flex().child(modified))
+            .child(div().w(px(SIZE_W)).flex().justify_end().child(size));
 
         let list = uniform_list(
             "entries",
@@ -1256,9 +1307,15 @@ impl Browser {
                                             .child(entry.name.clone())
                                             .into_any_element(),
                                     })
+                                    .child(div().w(px(DATE_W)).truncate().text_color(dim).child(
+                                        entry.modified.map_or_else(
+                                            || "--".to_string(),
+                                            |m| this.dates.format(m),
+                                        ),
+                                    ))
                                     .child(
                                         div()
-                                            .w(px(90.0))
+                                            .w(px(SIZE_W))
                                             .text_right()
                                             .text_color(dim)
                                             .child(entry.size_label()),

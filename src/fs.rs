@@ -1,6 +1,7 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use gpui::SharedString;
@@ -10,6 +11,9 @@ pub struct Entry {
     pub path: PathBuf,
     pub is_dir: bool,
     pub size: u64,
+    pub modified: Option<SystemTime>,
+    /// Lowercase name, computed once for sorting.
+    lower: String,
 }
 
 impl Entry {
@@ -22,8 +26,66 @@ impl Entry {
     }
 }
 
-/// Read a directory: folders first, then files, case-insensitive order.
-pub fn read_dir(path: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortKey {
+    Name,
+    Modified,
+    Size,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub key: SortKey,
+    pub ascending: bool,
+}
+
+impl Sort {
+    /// Sorting by `key`: A to Z, but newest and biggest first, like Finder.
+    pub fn by(key: SortKey) -> Self {
+        Self {
+            key,
+            ascending: key == SortKey::Name,
+        }
+    }
+
+    /// What a click on the `key` column does: flip the direction if it is
+    /// already the sort column, else switch to it.
+    pub fn clicked(self, key: SortKey) -> Self {
+        if self.key == key {
+            Self {
+                ascending: !self.ascending,
+                ..self
+            }
+        } else {
+            Self::by(key)
+        }
+    }
+}
+
+/// Folders always stay on top; the sort applies inside each group.
+pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| {
+            let primary = match sort.key {
+                SortKey::Name => a.lower.cmp(&b.lower),
+                SortKey::Modified => a.modified.cmp(&b.modified),
+                // Folders have no size: they stay in name order.
+                SortKey::Size if a.is_dir => return a.lower.cmp(&b.lower),
+                SortKey::Size => a.size.cmp(&b.size),
+            };
+            let primary = if sort.ascending {
+                primary
+            } else {
+                primary.reverse()
+            };
+            // Ties always fall back to A to Z, whatever the direction.
+            primary.then_with(|| a.lower.cmp(&b.lower))
+        })
+    });
+}
+
+/// Read a directory, sorted.
+pub fn read_dir(path: &Path, show_hidden: bool, sort: Sort) -> io::Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = fs::read_dir(path)?
         .filter_map(Result::ok)
         .filter_map(|e| {
@@ -34,15 +96,17 @@ pub fn read_dir(path: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
             // `metadata` follows symlinks, so linked folders open like folders.
             let meta = e.path().metadata().or_else(|_| e.metadata()).ok()?;
             Some(Entry {
+                lower: name.to_lowercase(),
                 name: name.into(),
                 path: e.path(),
                 is_dir: meta.is_dir(),
                 size: meta.len(),
+                modified: meta.modified().ok(),
             })
         })
         .collect();
 
-    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()));
+    sort_entries(&mut entries, sort);
     Ok(entries)
 }
 
@@ -207,6 +271,79 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn names(entries: &[Entry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_ref()).collect()
+    }
+
+    #[test]
+    fn sorts_by_each_column_keeping_folders_on_top() {
+        let root = scratch("sort");
+        fs::create_dir(root.join("zdir")).unwrap();
+        fs::create_dir(root.join("Adir")).unwrap();
+        fs::write(root.join("b.txt"), "12345").unwrap();
+        fs::write(root.join("C.txt"), "1").unwrap();
+        fs::write(root.join("a.txt"), "123").unwrap();
+        // Make modification times distinct and known: C oldest, then b, then a.
+        let t = |secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        // Both folders share a date, so the name decides their order.
+        for dir in ["zdir", "Adir"] {
+            fs::File::open(root.join(dir))
+                .unwrap()
+                .set_modified(t(500))
+                .unwrap();
+        }
+        for (f, secs) in [("C.txt", 1_000), ("b.txt", 2_000), ("a.txt", 3_000)] {
+            fs::File::options()
+                .write(true)
+                .open(root.join(f))
+                .unwrap()
+                .set_modified(t(secs))
+                .unwrap();
+        }
+
+        let by = |sort| names(&read_dir(&root, false, sort).unwrap()).join(",");
+        assert_eq!(by(Sort::by(SortKey::Name)), "Adir,zdir,a.txt,b.txt,C.txt");
+        assert_eq!(
+            by(Sort {
+                key: SortKey::Name,
+                ascending: false
+            }),
+            "zdir,Adir,C.txt,b.txt,a.txt"
+        );
+        // Newest first by default.
+        assert_eq!(
+            by(Sort::by(SortKey::Modified)),
+            "Adir,zdir,a.txt,b.txt,C.txt"
+        );
+        assert_eq!(
+            by(Sort {
+                key: SortKey::Modified,
+                ascending: true
+            }),
+            "Adir,zdir,C.txt,b.txt,a.txt"
+        );
+        // Biggest first by default; folders stay A to Z whatever the direction.
+        assert_eq!(by(Sort::by(SortKey::Size)), "Adir,zdir,b.txt,a.txt,C.txt");
+        assert_eq!(
+            by(Sort {
+                key: SortKey::Size,
+                ascending: true
+            }),
+            "Adir,zdir,C.txt,a.txt,b.txt"
+        );
+    }
+
+    #[test]
+    fn clicking_a_column_flips_or_switches() {
+        let s = Sort::by(SortKey::Name);
+        assert!(s.ascending);
+        let flipped = s.clicked(SortKey::Name);
+        assert!(!flipped.ascending && flipped.key == SortKey::Name);
+        let switched = flipped.clicked(SortKey::Size);
+        assert_eq!(switched, Sort::by(SortKey::Size));
+        assert!(!switched.ascending);
     }
 
     #[test]

@@ -23,6 +23,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "desktop",
     "downloads",
     "applications",
+    "sort-asc",
+    "sort-desc",
 ];
 
 pub struct Assets;
