@@ -83,8 +83,22 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
 | Clic droit sur un élément | Ouvrir, révéler dans le Finder, Open With (choisir une app, ou la définir par défaut), ouvrir un dossier dans le terminal, copier le chemin, renommer, mettre à la corbeille |
-| Clic droit dans le vide | Nouveau dossier (renommé aussitôt), ouvrir le terminal ici, afficher / masquer les fichiers cachés |
+| Clic droit dans le vide | Nouveau dossier (renommé aussitôt), ouvrir le terminal ici (ou « Open in… » pour en choisir un autre), afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
+
+## Terminal par défaut
+
+Par défaut, « Open in Terminal » utilise l'app qui ouvre les fichiers `.command` (Terminal.app sauf réglage contraire).
+Pour en changer : clic droit dans un dossier, **Open in…**, puis survole un terminal et clique **Set as Default**
+(Terminal, iTerm, Ghostty, Warp, Alacritty, kitty, WezTerm… sont détectés), ou **Choose Application…** pour une autre app.
+
+Le choix est gardé dans `~/Library/Application Support/ExploRust/config` :
+
+```
+terminal = /Applications/Ghostty.app
+```
+
+Supprime ce fichier pour revenir au terminal du système.
 
 ## Problèmes courants
 

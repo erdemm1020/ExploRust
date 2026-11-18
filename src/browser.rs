@@ -5,13 +5,14 @@ use std::{
 
 use gpui::{
     ClickEvent, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, NavigationDirection, Pixels, Point,
-    Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window, WindowControlArea,
-    anchored, deferred, div, prelude::*, px, svg, uniform_list,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, NavigationDirection, PathPromptOptions,
+    Pixels, Point, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    WindowControlArea, anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
 use crate::{
     apps::{self, AppInfo},
+    config::Config,
     fs,
     text_field::TextField,
     theme::Theme,
@@ -56,10 +57,21 @@ enum MenuAction {
     CopyPath,
     OpenWith,
     OpenTerminal,
+    TerminalChoices,
     Rename,
     Trash,
     NewFolder,
     ToggleHidden,
+}
+
+impl MenuAction {
+    fn opens_submenu(self) -> bool {
+        matches!(self, Self::OpenWith | Self::TerminalChoices)
+    }
+
+    fn is(self, other: Self) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
 }
 
 enum MenuEntry {
@@ -67,25 +79,33 @@ enum MenuEntry {
     Separator,
 }
 
-/// Apps able to open the selection, shown in the "Open With" submenu.
-struct OpenWith {
+#[derive(Clone, Copy, PartialEq)]
+enum SubmenuKind {
+    /// Apps that can open the selected files.
+    Files,
+    /// Terminal apps to open a folder in.
+    Terminals,
+}
+
+/// The expanded submenu: a list of apps, one of which is the default.
+struct Submenu {
+    kind: SubmenuKind,
     apps: Vec<AppInfo>,
     default: Option<PathBuf>,
-    /// File whose type the default app applies to.
-    file: PathBuf,
+    /// A file (its type gets the default app) or the folder to open in a terminal.
+    subject: PathBuf,
 }
 
 struct ContextMenu {
     position: Point<Pixels>,
     entries: Vec<MenuEntry>,
-    /// `Some` once the submenu has been expanded.
-    open_with: Option<OpenWith>,
+    /// `Some` once a submenu has been expanded.
+    submenu: Option<Submenu>,
 }
 
 const MENU_W: f32 = 210.0;
 const MENU_ITEM_H: f32 = 24.0;
 const MENU_SEPARATOR_H: f32 = 9.0;
-const MENU_PAD: f32 = 4.0;
 
 /// A row being renamed in place.
 struct Renaming {
@@ -111,6 +131,7 @@ pub struct Browser {
     forward: Vec<PathBuf>,
     show_hidden: bool,
     menu: Option<ContextMenu>,
+    config: Config,
     renaming: Option<Renaming>,
     places: Vec<Place>,
     scroll: UniformListScrollHandle,
@@ -169,6 +190,7 @@ impl Browser {
             forward: Vec::new(),
             show_hidden: false,
             menu: None,
+            config: Config::load(),
             renaming: None,
             places,
             scroll: UniformListScrollHandle::new(),
@@ -292,7 +314,10 @@ impl Browser {
     fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
         use MenuAction::*;
         let item = |label: &str, action| MenuEntry::Item(label.to_string().into(), action);
-        let terminal = item(&format!("Open in {}", apps::terminal().name), OpenTerminal);
+        let terminal = [
+            item(&format!("Open in {}", self.terminal().name), OpenTerminal),
+            item("Open in…", TerminalChoices),
+        ];
         let selected: Vec<&fs::Entry> = self
             .selected
             .iter()
@@ -308,7 +333,7 @@ impl Browser {
             }
             entries.push(item("Reveal in Finder", Reveal));
             if single && selected[0].is_dir {
-                entries.push(terminal);
+                entries.extend(terminal);
             }
             entries.push(MenuEntry::Separator);
             entries.push(item("Copy Path", CopyPath));
@@ -324,57 +349,152 @@ impl Browser {
                 "Show Hidden Files"
             };
             entries.push(item("New Folder", NewFolder));
-            entries.push(terminal);
+            entries.extend(terminal);
             entries.push(MenuEntry::Separator);
             entries.push(item(hidden, ToggleHidden));
         }
         self.menu = Some(ContextMenu {
             position,
             entries,
-            open_with: None,
+            submenu: None,
         });
     }
 
-    /// Expand (or collapse) the "Open With" submenu; apps are looked up on first use.
-    fn toggle_open_with(&mut self, cx: &mut Context<Self>) {
-        let Some(&ix) = self.selected.first() else {
-            return;
-        };
-        let Some(file) = self.entries.get(ix).map(|e| e.path.clone()) else {
-            return;
-        };
-        let Some(menu) = self.menu.as_mut() else {
-            return;
-        };
-        menu.open_with = match menu.open_with.take() {
-            Some(_) => None,
-            None => Some(OpenWith {
-                apps: apps::apps_for(&file),
-                default: apps::default_app(&file).map(|a| a.path),
-                file,
-            }),
-        };
-        cx.notify();
+    /// The terminal to use: the user's choice if it still exists, else the system one.
+    fn terminal(&self) -> AppInfo {
+        self.config
+            .terminal
+            .as_deref()
+            .filter(|p| p.exists())
+            .and_then(AppInfo::from_path)
+            .unwrap_or_else(apps::terminal)
     }
 
-    fn open_with_app(&mut self, app: &Path, cx: &mut Context<Self>) {
-        self.menu = None;
-        apps::open_with(&self.selected_paths(), app);
-        cx.notify();
+    /// A single selected folder, else the folder being browsed.
+    fn terminal_dir(&self) -> PathBuf {
+        match self.selected_paths().as_slice() {
+            [p] if p.is_dir() => p.clone(),
+            _ => self.cwd.clone(),
+        }
     }
 
-    fn set_default_app(&mut self, app: &Path, cx: &mut Context<Self>) {
-        if let Some(menu) = self.menu.take()
-            && let Some(ow) = menu.open_with
-        {
-            apps::set_default(app, &ow.file);
+    /// Expand (or collapse) a submenu; apps are looked up on first use.
+    fn toggle_submenu(&mut self, kind: SubmenuKind, cx: &mut Context<Self>) {
+        let expanded = self
+            .menu
+            .as_ref()
+            .and_then(|m| m.submenu.as_ref())
+            .map(|sm| sm.kind);
+        let submenu = if expanded == Some(kind) {
+            None
+        } else {
+            match kind {
+                SubmenuKind::Files => {
+                    let Some(file) = self
+                        .selected
+                        .first()
+                        .and_then(|&ix| self.entries.get(ix))
+                        .map(|e| e.path.clone())
+                    else {
+                        return;
+                    };
+                    Some(Submenu {
+                        kind,
+                        apps: apps::apps_for(&file),
+                        default: apps::default_app(&file).map(|a| a.path),
+                        subject: file,
+                    })
+                }
+                SubmenuKind::Terminals => {
+                    let default = self.terminal();
+                    let mut terminals = apps::installed_terminals();
+                    // A terminal picked with "Choose…" is not in the known list.
+                    if !terminals.iter().any(|t| t.path == default.path) {
+                        terminals.push(default.clone());
+                    }
+                    terminals.sort_by_cached_key(|t| t.path != default.path);
+                    Some(Submenu {
+                        kind,
+                        apps: terminals,
+                        default: Some(default.path),
+                        subject: self.terminal_dir(),
+                    })
+                }
+            }
+        };
+        if let Some(menu) = self.menu.as_mut() {
+            menu.submenu = submenu;
         }
         cx.notify();
     }
 
+    /// A submenu row was clicked: open with that app, once.
+    fn open_with_app(&mut self, app: &Path, cx: &mut Context<Self>) {
+        let Some(sm) = self.menu.take().and_then(|m| m.submenu) else {
+            return;
+        };
+        match sm.kind {
+            SubmenuKind::Files => apps::open_with(&self.selected_paths(), app),
+            SubmenuKind::Terminals => apps::open_with(&[sm.subject], app),
+        }
+        cx.notify();
+    }
+
+    /// "Set as Default" on a submenu row.
+    fn set_default_app(&mut self, app: &Path, cx: &mut Context<Self>) {
+        let Some(sm) = self.menu.take().and_then(|m| m.submenu) else {
+            return;
+        };
+        match sm.kind {
+            SubmenuKind::Files => apps::set_default(app, &sm.subject),
+            SubmenuKind::Terminals => self.set_terminal(app),
+        }
+        cx.notify();
+    }
+
+    fn set_terminal(&mut self, app: &Path) {
+        self.config.terminal = Some(app.to_path_buf());
+        // Not being able to save only means the choice is forgotten at next launch.
+        let _ = self.config.save();
+    }
+
+    /// "Choose…": pick any app with the system dialog; it becomes the default
+    /// terminal and opens the folder right away.
+    fn choose_terminal(&mut self, cx: &mut Context<Self>) {
+        let Some(sm) = self.menu.take().and_then(|m| m.submenu) else {
+            return;
+        };
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await
+                && let Some(app) = paths
+                    .first()
+                    .filter(|p| p.extension().is_some_and(|e| e == "app"))
+            {
+                this.update(cx, |this, cx| {
+                    this.set_terminal(app);
+                    apps::open_with(&[sm.subject], app);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn run_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
-        if let MenuAction::OpenWith = action {
-            return self.toggle_open_with(cx);
+        match action {
+            MenuAction::OpenWith => return self.toggle_submenu(SubmenuKind::Files, cx),
+            MenuAction::TerminalChoices => {
+                return self.toggle_submenu(SubmenuKind::Terminals, cx);
+            }
+            _ => {}
         }
         self.menu = None;
         match action {
@@ -393,14 +513,9 @@ impl Browser {
                     .join("\n");
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
-            MenuAction::OpenWith => {}
+            MenuAction::OpenWith | MenuAction::TerminalChoices => {}
             MenuAction::OpenTerminal => {
-                // A single selected folder, else the folder being browsed.
-                let dir = match self.selected_paths().as_slice() {
-                    [p] if p.is_dir() => p.clone(),
-                    _ => self.cwd.clone(),
-                };
-                apps::open_with(&[dir], &apps::terminal().path);
+                apps::open_with(&[self.terminal_dir()], &self.terminal().path)
             }
             MenuAction::Rename => self.begin_rename(),
             MenuAction::Trash => {
@@ -664,13 +779,17 @@ impl Browser {
                 .shadow_lg()
         };
 
-        // Vertical offset of the "Open With" row, so the submenu lines up with it.
-        let mut open_with_y = MENU_PAD;
+        // Vertical offset of the row that opened the submenu, so both line up.
+        let trigger = menu.submenu.as_ref().map(|sm| match sm.kind {
+            SubmenuKind::Files => MenuAction::OpenWith,
+            SubmenuKind::Terminals => MenuAction::TerminalChoices,
+        });
+        let mut submenu_y = 0.0;
         for entry in &menu.entries {
             match entry {
-                MenuEntry::Item(_, MenuAction::OpenWith) => break,
-                MenuEntry::Item(..) => open_with_y += MENU_ITEM_H,
-                MenuEntry::Separator => open_with_y += MENU_SEPARATOR_H,
+                MenuEntry::Item(_, a) if trigger.is_some_and(|t| t.is(*a)) => break,
+                MenuEntry::Item(..) => submenu_y += MENU_ITEM_H,
+                MenuEntry::Separator => submenu_y += MENU_SEPARATOR_H,
             }
         }
 
@@ -687,8 +806,7 @@ impl Browser {
                     .into_any_element(),
                 MenuEntry::Item(label, action) => {
                     let action = *action;
-                    let expanded =
-                        matches!(action, MenuAction::OpenWith) && menu.open_with.is_some();
+                    let expanded = trigger.is_some_and(|t| t.is(action));
                     div()
                         .id(("menu-item", i))
                         .h(px(MENU_ITEM_H))
@@ -701,77 +819,99 @@ impl Browser {
                         .hover(|d| d.bg(t.accent).text_color(t.on_accent))
                         .on_click(cx.listener(move |this, _, _, cx| this.run_action(action, cx)))
                         .child(label.clone())
-                        .when(matches!(action, MenuAction::OpenWith), |d| d.child("›"))
+                        .when(action.opens_submenu(), |d| d.child("›"))
                         .into_any_element()
                 }
             });
 
-        let submenu = menu.open_with.as_ref().map(|ow| {
-            let rows: Vec<_> =
-                if ow.apps.is_empty() {
-                    vec![
-                        div()
-                            .h(px(MENU_ITEM_H))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .text_color(t.dim)
-                            .child("No application")
-                            .into_any_element(),
-                    ]
-                } else {
-                    ow.apps
-                        .iter()
-                        .enumerate()
-                        .map(|(i, app)| {
-                            let is_default = ow.default.as_ref() == Some(&app.path);
-                            let group: SharedString = format!("app-{i}").into();
-                            let (open_path, default_path) = (app.path.clone(), app.path.clone());
+        let submenu = menu.submenu.as_ref().map(|sm| {
+            let mut rows: Vec<_> = sm
+                .apps
+                .iter()
+                .enumerate()
+                .map(|(i, app)| {
+                    let is_default = sm.default.as_ref() == Some(&app.path);
+                    let group: SharedString = format!("app-{i}").into();
+                    let (open_path, default_path) = (app.path.clone(), app.path.clone());
+                    div()
+                        .id(("app", i))
+                        .group(group.clone())
+                        .h(px(MENU_ITEM_H))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .rounded_md()
+                        .hover(|d| d.bg(t.accent).text_color(t.on_accent))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_with_app(&open_path, cx)),
+                        )
+                        .child(div().min_w_0().truncate().child(app.name.clone()))
+                        .child(if is_default {
                             div()
-                                .id(("app", i))
-                                .group(group.clone())
-                                .h(px(MENU_ITEM_H))
-                                .px_3()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .rounded_md()
-                                .hover(|d| d.bg(t.accent).text_color(t.on_accent))
+                                .flex_none()
+                                .text_size(px(11.0))
+                                .opacity(0.6)
+                                .child("Default")
+                                .into_any_element()
+                        } else {
+                            // Only revealed while the row is hovered.
+                            div()
+                                .id(("set-default", i))
+                                .flex_none()
+                                .px_1()
+                                .rounded_sm()
+                                .text_size(px(11.0))
+                                .opacity(0.0)
+                                .group_hover(group, |s| s.opacity(1.0))
+                                .hover(|d| d.bg(Hsla::from(t.on_accent).opacity(0.25)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_with_app(&open_path, cx)
+                                    cx.stop_propagation();
+                                    this.set_default_app(&default_path, cx)
                                 }))
-                                .child(div().min_w_0().truncate().child(app.name.clone()))
-                                .child(if is_default {
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(11.0))
-                                        .opacity(0.6)
-                                        .child("Default")
-                                        .into_any_element()
-                                } else {
-                                    // Only revealed while the row is hovered.
-                                    div()
-                                        .id(("set-default", i))
-                                        .flex_none()
-                                        .px_1()
-                                        .rounded_sm()
-                                        .text_size(px(11.0))
-                                        .opacity(0.0)
-                                        .group_hover(group, |s| s.opacity(1.0))
-                                        .hover(|d| d.bg(Hsla::from(t.on_accent).opacity(0.25)))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.set_default_app(&default_path, cx)
-                                        }))
-                                        .child("Set as Default")
-                                        .into_any_element()
-                                })
+                                .child("Set as Default")
                                 .into_any_element()
                         })
-                        .collect()
-                };
-            panel(290.0).mt(px(open_with_y - MENU_PAD)).children(rows)
+                        .into_any_element()
+                })
+                .collect();
+
+            if sm.kind == SubmenuKind::Terminals {
+                rows.push(
+                    div()
+                        .h(px(1.0))
+                        .mx_2()
+                        .my_1()
+                        .bg(t.border)
+                        .into_any_element(),
+                );
+                rows.push(
+                    div()
+                        .id("choose-terminal")
+                        .h(px(MENU_ITEM_H))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .hover(|d| d.bg(t.accent).text_color(t.on_accent))
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_terminal(cx)))
+                        .child("Choose Application…")
+                        .into_any_element(),
+                );
+            } else if rows.is_empty() {
+                rows.push(
+                    div()
+                        .h(px(MENU_ITEM_H))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .text_color(t.dim)
+                        .child("No application")
+                        .into_any_element(),
+                );
+            }
+            panel(290.0).mt(px(submenu_y)).children(rows)
         });
 
         Some(
