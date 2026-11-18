@@ -15,7 +15,14 @@ ditto "$APP" "$STAGE/ExploRust.app"
 ln -s /Applications "$STAGE/Applications"
 
 rm -f "$DMG"
-hdiutil create -volname "ExploRust" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+# hdiutil sometimes fails with "Resource busy" on CI machines: try a few times.
+for attempt in 1 2 3; do
+    if hdiutil create -volname "ExploRust" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null; then
+        break
+    fi
+    [ "$attempt" = 3 ] && { echo "hdiutil failed 3 times" >&2; exit 1; }
+    sleep 5
+done
 
 # Same format as `shasum -a 256 file`: "<hash>  <name>". The app checks it before installing.
 (cd dist && shasum -a 256 "ExploRust-$VERSION.dmg" > "ExploRust-$VERSION.dmg.sha256")

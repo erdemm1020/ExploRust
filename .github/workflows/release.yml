@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    # Apple Silicon runner; it also builds the Intel half of the universal app.
+    # (macos-14 was retired by GitHub on 2026-11-02.)
+    runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
