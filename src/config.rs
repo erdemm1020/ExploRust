@@ -68,6 +68,15 @@ choices! {
     } default Comfortable
 }
 
+choices! {
+    /// Which Claude model the "Claude" features ask.
+    ClaudeModel {
+        Opus = "opus", "Opus 5.5";
+        Sonnet = "sonnet", "Sonnet 5.5";
+        Haiku = "haiku", "Haiku 5.5";
+    } default Opus
+}
+
 impl Accent {
     /// The fixed color, or `None` for the system accent.
     pub fn rgb(self) -> Option<u32> {
@@ -114,6 +123,20 @@ pub struct Config {
     /// Start in the folder that was open last time.
     pub reopen_last: bool,
     pub last_folder: Option<PathBuf>,
+    /// Show the size of folders in the list (found out in the background).
+    pub folder_sizes: bool,
+    /// Master switch of the developer features below: off hides them all.
+    pub dev_tools: bool,
+    /// Git status badges, branch, and the Git entries of the menu.
+    pub git: bool,
+    pub git_dim_ignored: bool,
+    /// Tag project folders (Rust, Node...) and offer their commands.
+    pub project_detect: bool,
+    /// Browse servers over SSH.
+    pub ssh: bool,
+    /// Claude features (they send the files you pick to Anthropic).
+    pub claude: bool,
+    pub claude_model: ClaudeModel,
     /// Look for a new version when the app starts.
     pub check_updates: bool,
     /// A version the user chose not to be asked about again.
@@ -139,6 +162,14 @@ impl Default for Config {
             show_hidden: false,
             reopen_last: false,
             last_folder: None,
+            folder_sizes: true,
+            dev_tools: true,
+            git: true,
+            git_dim_ignored: true,
+            project_detect: true,
+            ssh: true,
+            claude: false,
+            claude_model: ClaudeModel::default(),
             check_updates: true,
             skipped_version: None,
             terminal: None,
@@ -193,6 +224,16 @@ impl Config {
                 "live_refresh" => c.live_refresh = flag(value).unwrap_or(c.live_refresh),
                 "relative_dates" => c.relative_dates = flag(value).unwrap_or(c.relative_dates),
                 "show_hidden" => c.show_hidden = flag(value).unwrap_or(c.show_hidden),
+                "folder_sizes" => c.folder_sizes = flag(value).unwrap_or(c.folder_sizes),
+                "dev_tools" => c.dev_tools = flag(value).unwrap_or(c.dev_tools),
+                "git" => c.git = flag(value).unwrap_or(c.git),
+                "git_dim_ignored" => c.git_dim_ignored = flag(value).unwrap_or(c.git_dim_ignored),
+                "project_detect" => c.project_detect = flag(value).unwrap_or(c.project_detect),
+                "ssh" => c.ssh = flag(value).unwrap_or(c.ssh),
+                "claude" => c.claude = flag(value).unwrap_or(c.claude),
+                "claude_model" => {
+                    c.claude_model = ClaudeModel::parse(value).unwrap_or(c.claude_model)
+                }
                 "check_updates" => c.check_updates = flag(value).unwrap_or(c.check_updates),
                 "skipped_version" => {
                     c.skipped_version = (!value.is_empty()).then(|| value.to_string())
@@ -216,7 +257,9 @@ impl Config {
         let mut out = format!(
             "theme = {}\naccent = {}\ndensity = {}\nnatural_sort = {}\nfolders_on_top = {}\n\
              single_click = {}\nlive_refresh = {}\nrelative_dates = {}\nshow_hidden = {}\n\
-             reopen_last = {}\ncheck_updates = {}\ntrash_warning = {}\n",
+             reopen_last = {}\ncheck_updates = {}\ntrash_warning = {}\n\
+             folder_sizes = {}\ndev_tools = {}\ngit = {}\ngit_dim_ignored = {}\nproject_detect = {}\n\
+             ssh = {}\nclaude = {}\nclaude_model = {}\n",
             self.theme.key(),
             self.accent.key(),
             self.density.key(),
@@ -230,6 +273,14 @@ impl Config {
             flag(self.check_updates),
             self.trash_warning
                 .map_or("off".to_string(), |n| n.to_string()),
+            flag(self.folder_sizes),
+            flag(self.dev_tools),
+            flag(self.git),
+            flag(self.git_dim_ignored),
+            flag(self.project_detect),
+            flag(self.ssh),
+            flag(self.claude),
+            self.claude_model.key(),
         );
         for (key, value) in [
             ("last_folder", &self.last_folder),
@@ -274,6 +325,14 @@ mod tests {
             last_folder: Some("/Users/me/My Docs".into()),
             check_updates: false,
             skipped_version: Some("0.3.0".into()),
+            folder_sizes: false,
+            dev_tools: false,
+            git: false,
+            git_dim_ignored: false,
+            project_detect: false,
+            ssh: false,
+            claude: true,
+            claude_model: ClaudeModel::Haiku,
             terminal: Some("/Applications/Ghostty.app".into()),
             editor: Some("/Applications/Zed.app".into()),
         };
