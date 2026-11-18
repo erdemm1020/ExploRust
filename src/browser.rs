@@ -12,6 +12,7 @@ use gpui::{
 };
 
 mod ops;
+mod scans;
 mod settings;
 mod updates;
 
@@ -71,6 +72,7 @@ enum MenuAction {
     OpenTerminal,
     OpenEditor,
     OpenInChoices,
+    Info,
     Compress,
     Extract,
     Rename,
@@ -169,6 +171,13 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    dir_sizes: std::collections::HashMap<PathBuf, u64>,
+    sizing: std::collections::HashSet<PathBuf>,
+    size_gen: u64,
+    /// A listing was just made: look up what it needs, in the background.
+    want_scans: bool,
+    info_open: bool,
+    info: Option<scans::InfoState>,
     jobs: Vec<ops::RunningJob>,
     next_job: u64,
     notice: Option<(String, std::time::Instant)>,
@@ -252,6 +261,12 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            dir_sizes: Default::default(),
+            sizing: Default::default(),
+            size_gen: 0,
+            want_scans: false,
+            info_open: false,
+            info: None,
             jobs: Vec::new(),
             next_job: 0,
             notice: None,
@@ -314,6 +329,12 @@ impl Browser {
         self.renaming = None;
         // An unreadable folder (permissions) just shows up empty.
         self.all = fs::read_dir(&self.cwd, self.config.show_hidden, self.sort).unwrap_or_default();
+        for e in &mut self.all {
+            if e.is_dir {
+                e.dir_size = self.dir_sizes.get(&e.path).copied();
+            }
+        }
+        self.want_scans = true;
         self.listed_at = dir_mtime(&self.cwd);
         self.apply_filter();
         self.remember_folder();
@@ -373,6 +394,14 @@ impl Browser {
         self.clear_selection();
     }
 
+    /// Going somewhere else: what was looked up about the old folder is dropped.
+    fn navigated(&mut self) {
+        self.clear_search();
+        self.dir_sizes.clear();
+        self.sizing.clear();
+        self.info = None;
+    }
+
     /// Leaving a folder leaves its search behind, like Finder.
     fn clear_search(&mut self) {
         self.query.clear();
@@ -385,7 +414,7 @@ impl Browser {
         }
         self.back.push(std::mem::replace(&mut self.cwd, path));
         self.forward.clear();
-        self.clear_search();
+        self.navigated();
         self.reload();
         cx.notify();
     }
@@ -393,7 +422,7 @@ impl Browser {
     fn go_back(&mut self, cx: &mut Context<Self>) {
         if let Some(prev) = self.back.pop() {
             self.forward.push(std::mem::replace(&mut self.cwd, prev));
-            self.clear_search();
+            self.navigated();
             self.reload();
             cx.notify();
         }
@@ -402,7 +431,7 @@ impl Browser {
     fn go_forward(&mut self, cx: &mut Context<Self>) {
         if let Some(next) = self.forward.pop() {
             self.back.push(std::mem::replace(&mut self.cwd, next));
-            self.clear_search();
+            self.navigated();
             self.reload();
             cx.notify();
         }
@@ -522,6 +551,7 @@ impl Browser {
             }
             entries.push(open_in);
             entries.push(MenuEntry::Separator);
+            entries.push(item("Get Info", Info));
             entries.push(item("Copy", Copy));
             entries.push(item("Copy Path", CopyPath));
             if single && selected[0].is_dir {
@@ -779,6 +809,7 @@ impl Browser {
                     apps::open_with(&self.editor_targets(), &editor.path);
                 }
             }
+            MenuAction::Info => self.toggle_info(cx),
             MenuAction::Compress => self.compress_selection(cx),
             MenuAction::Extract => self.extract_selection(cx),
             MenuAction::Rename => self.begin_rename(),
@@ -1075,6 +1106,7 @@ impl Browser {
             }
             "backspace" if cmd => self.trash_selection(window, cx),
             // ⌘⌥C copies the path as text, like Finder.
+            "i" if cmd => self.toggle_info(cx),
             "z" if cmd && k.modifiers.shift => self.redo_last(cx),
             "z" if cmd => self.undo_last(cx),
             "c" if cmd && k.modifiers.alt => self.copy_selection_path(cx),
@@ -1126,6 +1158,10 @@ impl Focusable for Browser {
 impl Render for Browser {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::resolve(&self.config, window.appearance());
+        if std::mem::take(&mut self.want_scans) {
+            self.start_scans(cx);
+        }
+        self.sync_info(cx);
 
         div()
             .id("root")
@@ -1170,10 +1206,17 @@ impl Render for Browser {
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .flex_col()
-                    .child(self.toolbar(t, cx))
-                    .child(self.list(t, cx))
-                    .child(self.status_bar(t, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(self.toolbar(t, cx))
+                            .child(self.list(t, cx))
+                            .child(self.status_bar(t, cx)),
+                    )
+                    .when(self.info_open, |d| d.child(self.info_panel(t, cx)))
                     .into_any_element()
             })
             .children(self.context_menu(t, cx))
@@ -1710,7 +1753,7 @@ impl Browser {
                                             .w(px(SIZE_W))
                                             .text_right()
                                             .text_color(dim)
-                                            .child(entry.size_label()),
+                                            .child(this.size_text(entry)),
                                     ),
                             ),
                         )

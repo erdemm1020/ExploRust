@@ -15,13 +15,19 @@ pub struct Entry {
     pub is_dir: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
+    /// Space a folder takes, once found out (in the background).
+    pub dir_size: Option<u64>,
     /// Lowercase name, computed once for sorting.
     lower: String,
 }
 
 impl Entry {
     fn file_size(&self) -> u64 {
-        if self.is_dir { 0 } else { self.size }
+        if self.is_dir {
+            self.dir_size.unwrap_or(0)
+        } else {
+            self.size
+        }
     }
 
     /// Case-insensitive "name contains", `needle` already lowercase.
@@ -30,10 +36,10 @@ impl Entry {
     }
 
     pub fn size_label(&self) -> SharedString {
-        if self.is_dir {
-            "--".into()
-        } else {
-            format_size(self.size).into()
+        match (self.is_dir, self.dir_size) {
+            (true, Some(bytes)) => format_size(bytes).into(),
+            (true, None) => "--".into(),
+            (false, _) => format_size(self.size).into(),
         }
     }
 }
@@ -184,6 +190,7 @@ pub fn read_dir(path: &Path, show_hidden: bool, sort: Sort) -> io::Result<Vec<En
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 modified: meta.modified().ok(),
+                dir_size: None,
             })
         })
         .collect();
@@ -192,7 +199,7 @@ pub fn read_dir(path: &Path, show_hidden: bool, sort: Sort) -> io::Result<Vec<En
     Ok(entries)
 }
 
-fn format_size(bytes: u64) -> String {
+pub fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;
