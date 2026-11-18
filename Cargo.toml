@@ -5,3 +5,10 @@ edition = "2024"
 
 [dependencies]
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
