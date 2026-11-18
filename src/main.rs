@@ -9,6 +9,8 @@ mod fs;
 mod git;
 mod info;
 mod jobs;
+mod project;
+mod shell;
 mod sizes;
 mod text_field;
 mod theme;
