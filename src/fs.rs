@@ -17,11 +17,27 @@ pub struct Entry {
     pub modified: Option<SystemTime>,
     /// Space a folder takes, once found out (in the background).
     pub dir_size: Option<u64>,
+    /// A date already worded (items on a server come as text).
+    pub date_label: Option<String>,
     /// Lowercase name, computed once for sorting.
     lower: String,
 }
 
 impl Entry {
+    /// An item of a server's folder.
+    pub fn remote(path: PathBuf, name: String, is_dir: bool, size: u64, date: String) -> Self {
+        Self {
+            lower: name.to_lowercase(),
+            name: name.into(),
+            path,
+            is_dir,
+            size,
+            modified: None,
+            dir_size: None,
+            date_label: Some(date),
+        }
+    }
+
     fn file_size(&self) -> u64 {
         if self.is_dir {
             self.dir_size.unwrap_or(0)
@@ -191,6 +207,7 @@ pub fn read_dir(path: &Path, show_hidden: bool, sort: Sort) -> io::Result<Vec<En
                 size: meta.len(),
                 modified: meta.modified().ok(),
                 dir_size: None,
+                date_label: None,
             })
         })
         .collect();

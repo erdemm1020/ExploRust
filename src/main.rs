@@ -12,6 +12,7 @@ mod jobs;
 mod project;
 mod shell;
 mod sizes;
+mod ssh;
 mod text_field;
 mod theme;
 mod trash;
