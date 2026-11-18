@@ -135,6 +135,15 @@ impl Conn {
             }
         }
         o.extend(self.extra.clone());
+        // Debug builds only: more `-o` options from the environment, to try the window
+        // against a throwaway server.
+        #[cfg(debug_assertions)]
+        if let Ok(extra) = std::env::var("EXPLORUST_SSH_OPTS") {
+            for opt in extra.split_whitespace() {
+                o.push("-o".into());
+                o.push(opt.to_string());
+            }
+        }
         o
     }
 

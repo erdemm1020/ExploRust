@@ -14,6 +14,7 @@ use gpui::{
 mod git_ui;
 mod ops;
 mod project_ui;
+mod remote;
 mod scans;
 mod settings;
 mod updates;
@@ -75,6 +76,12 @@ enum MenuAction {
     OpenEditor,
     OpenInChoices,
     Info,
+    RemoteOpen,
+    RemoteDownload,
+    RemoteDelete,
+    RemoteNewFolder,
+    RemoteTerminal,
+    RemoteRefresh,
     RunTask(u8),
     GitStage,
     GitUnstage,
@@ -178,6 +185,16 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    /// The server whose folder is shown (`cwd` is then a path on that server).
+    remote: Option<String>,
+    remote_gen: u64,
+    remote_loading: bool,
+    remote_error: Option<String>,
+    /// The "Connect to Server" box, while it is open.
+    connect: Option<TextField>,
+    /// An item to rename as soon as the listing that holds it arrives.
+    rename_when_listed: Option<PathBuf>,
+    ssh_hosts: Vec<String>,
     projects: std::collections::HashMap<PathBuf, crate::project::Kind>,
     project_scan_id: u64,
     /// The commands the open context menu offers, and the folder to run them in.
@@ -276,6 +293,13 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            remote: None,
+            remote_gen: 0,
+            remote_loading: false,
+            remote_error: None,
+            connect: None,
+            rename_when_listed: None,
+            ssh_hosts: crate::ssh::load_hosts(),
             projects: Default::default(),
             project_scan_id: 0,
             menu_tasks: None,
@@ -304,6 +328,13 @@ impl Browser {
             focus,
         };
         this.reload();
+
+        // `ExploRust ssh://host/folder` opens a server straight away.
+        if let Some(target) = std::env::args().nth(1).filter(|a| a.starts_with("ssh://"))
+            && this.ssh_enabled()
+        {
+            this.connect_to(&target, cx);
+        }
 
         // Look for a new version a few seconds after start, off the critical path.
         if this.config.check_updates {
@@ -349,6 +380,12 @@ impl Browser {
     fn reload(&mut self) {
         self.menu = None;
         self.renaming = None;
+        // A server's folder is listed by `fetch_remote`; here it is only sorted again.
+        if self.remote.is_some() {
+            fs::sort_entries(&mut self.all, self.sort);
+            self.apply_filter();
+            return;
+        }
         // An unreadable folder (permissions) just shows up empty.
         self.all = fs::read_dir(&self.cwd, self.config.show_hidden, self.sort).unwrap_or_default();
         for e in &mut self.all {
@@ -375,7 +412,10 @@ impl Browser {
         if !self.settings_open && self.menu.is_none() {
             self.tick_git(cx);
         }
-        let busy = self.renaming.is_some() || self.menu.is_some() || self.settings_open;
+        let busy = self.renaming.is_some()
+            || self.menu.is_some()
+            || self.settings_open
+            || self.remote.is_some();
         if !self.config.live_refresh || busy || dir_mtime(&self.cwd) == self.listed_at {
             return;
         }
@@ -436,11 +476,29 @@ impl Browser {
     }
 
     fn go_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if path == self.cwd || !path.is_dir() {
+        // A place on a server.
+        if let Some((host, path)) = remote::split_location(&path) {
+            return self.go_remote(host, path, cx);
+        }
+        if !path.is_dir() || (self.remote.is_none() && path == self.cwd) {
             return;
         }
-        self.back.push(std::mem::replace(&mut self.cwd, path));
+        self.back.push(self.location());
         self.forward.clear();
+        self.remote = None;
+        self.cwd = path;
+        self.navigated();
+        self.reload();
+        cx.notify();
+    }
+
+    /// Show a place from the history (local, or on a server).
+    fn arrive(&mut self, place: PathBuf, cx: &mut Context<Self>) {
+        if let Some((host, path)) = remote::split_location(&place) {
+            return self.set_remote(host, path, cx);
+        }
+        self.remote = None;
+        self.cwd = place;
         self.navigated();
         self.reload();
         cx.notify();
@@ -448,26 +506,25 @@ impl Browser {
 
     fn go_back(&mut self, cx: &mut Context<Self>) {
         if let Some(prev) = self.back.pop() {
-            self.forward.push(std::mem::replace(&mut self.cwd, prev));
-            self.navigated();
-            self.reload();
-            cx.notify();
+            self.forward.push(self.location());
+            self.arrive(prev, cx);
         }
     }
 
     fn go_forward(&mut self, cx: &mut Context<Self>) {
         if let Some(next) = self.forward.pop() {
-            self.back.push(std::mem::replace(&mut self.cwd, next));
-            self.navigated();
-            self.reload();
-            cx.notify();
+            self.back.push(self.location());
+            self.arrive(next, cx);
         }
     }
 
     fn go_up(&mut self, cx: &mut Context<Self>) {
         if let Some(parent) = self.cwd.parent() {
             let from = self.cwd.clone();
-            self.go_to(parent.to_path_buf(), cx);
+            match self.remote.clone() {
+                Some(host) => self.go_remote(host, parent.to_string_lossy().into_owned(), cx),
+                None => self.go_to(parent.to_path_buf(), cx),
+            }
             // Keep the folder we just left selected, like Finder.
             self.select_path(&from);
         }
@@ -524,6 +581,9 @@ impl Browser {
 
     /// A single folder is entered; files are opened with their default app.
     fn open_selected(&mut self, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.open_remote(cx);
+        }
         let targets: Vec<(PathBuf, bool)> = self
             .selected
             .iter()
@@ -542,6 +602,9 @@ impl Browser {
 
     /// Open the right-click menu: file actions on a row, folder actions elsewhere.
     fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
+        if self.remote.is_some() {
+            return self.open_remote_menu(position, on_item);
+        }
         use MenuAction::*;
         let item = |label: &str, action| MenuEntry::Item(label.to_string().into(), action);
         // "Open in <editor>", "Open in <terminal>", and the list to pick others from.
@@ -842,6 +905,12 @@ impl Browser {
                 }
             }
             MenuAction::Info => self.toggle_info(cx),
+            MenuAction::RemoteOpen => self.open_remote(cx),
+            MenuAction::RemoteDownload => self.download_remote(cx),
+            MenuAction::RemoteDelete => return self.remote_delete(window, cx),
+            MenuAction::RemoteNewFolder => self.remote_new_folder(cx),
+            MenuAction::RemoteTerminal => self.remote_terminal(cx),
+            MenuAction::RemoteRefresh => self.fetch_remote(cx),
             MenuAction::RunTask(i) => self.run_task(i, cx),
             MenuAction::GitStage => self.git_stage(true, cx),
             MenuAction::GitUnstage => self.git_stage(false, cx),
@@ -950,6 +1019,15 @@ impl Browser {
         let Some(r) = self.renaming.take() else {
             return;
         };
+        if self.remote.is_some() {
+            if let Some(entry) = self.entries.get(r.ix)
+                && r.field.text() != entry.name.as_ref()
+            {
+                let (from, name) = (entry.path.clone(), r.field.text().to_string());
+                self.remote_rename(from, name, cx);
+            }
+            return;
+        }
         if let Some(entry) = self.entries.get(r.ix)
             && r.field.text() != entry.name.as_ref()
             && let Ok(new_path) = fs::rename(&entry.path, r.field.text())
@@ -1012,6 +1090,11 @@ impl Browser {
 
     /// Move (or copy) dropped paths into `dest`, in the background.
     fn drop_paths(&mut self, paths: &[PathBuf], dest: &Path, copy: bool, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            // Dropping files on a server's folder sends them there.
+            let into = dest.to_string_lossy().into_owned();
+            return self.upload_items(paths.to_vec(), into, cx);
+        }
         self.transfer_items(paths.to_vec(), dest.to_path_buf(), copy, cx);
     }
 
@@ -1103,6 +1186,9 @@ impl Browser {
     }
 
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connect.is_some() {
+            return self.on_connect_key(ev, cx);
+        }
         if self.renaming.is_some() {
             return self.on_rename_key(ev, cx);
         }
@@ -1116,6 +1202,12 @@ impl Browser {
                 self.toggle_settings(cx);
             }
             return;
+        }
+        if k.key == "k" && k.modifiers.platform {
+            return self.open_connect(cx);
+        }
+        if self.remote.is_some() {
+            return self.on_remote_key(ev, window, cx);
         }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform;
@@ -1176,6 +1268,13 @@ impl Browser {
     }
 
     fn title(&self) -> SharedString {
+        if let Some(host) = &self.remote {
+            let name = self
+                .cwd
+                .file_name()
+                .map_or_else(|| "/".to_string(), |n| n.to_string_lossy().into_owned());
+            return format!("{host}: {name}").into();
+        }
         self.cwd
             .file_name()
             .map_or_else(
@@ -1257,6 +1356,7 @@ impl Render for Browser {
                     .into_any_element()
             })
             .children(self.context_menu(t, cx))
+            .children(self.connect_dialog(t, cx))
     }
 }
 
@@ -1484,7 +1584,12 @@ impl Browser {
                 }))
                 .child(icon(place.icon, t.folder))
                 .child(place.name.clone());
-            Self::drop_target(el, place.path.clone(), t, cx)
+            // Dropping on a local place makes no sense while a server is shown.
+            if self.remote.is_some() {
+                el
+            } else {
+                Self::drop_target(el, place.path.clone(), t, cx)
+            }
         });
 
         div()
@@ -1503,6 +1608,7 @@ impl Browser {
                     .window_control_area(WindowControlArea::Drag),
             )
             .child(div().px_2().flex().flex_col().gap_0p5().children(items))
+            .children(self.servers_section(t, cx))
             // Pushes the settings button to the bottom.
             .child(div().flex_1())
             .child(
@@ -1752,12 +1858,18 @@ impl Browser {
                                             cx.notify();
                                         }),
                                     )
-                                    .on_drag(DragPaths(drag_paths), move |_, position, _, cx| {
-                                        cx.new(|_| DragPreview {
-                                            label: label.clone(),
-                                            position,
-                                            theme: t,
-                                        })
+                                    // Items of a server are not dragged out (only dropped in).
+                                    .when(this.remote.is_none(), |d| {
+                                        d.on_drag(
+                                            DragPaths(drag_paths),
+                                            move |_, position, _, cx| {
+                                                cx.new(|_| DragPreview {
+                                                    label: label.clone(),
+                                                    position,
+                                                    theme: t,
+                                                })
+                                            },
+                                        )
                                     })
                                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                                         let m = ev.modifiers();
@@ -1796,7 +1908,12 @@ impl Browser {
                                     })
                                     .child(div().w(px(DATE_W)).truncate().text_color(dim).child(
                                         entry.modified.map_or_else(
-                                            || "--".to_string(),
+                                            || {
+                                                entry
+                                                    .date_label
+                                                    .clone()
+                                                    .unwrap_or_else(|| "--".to_string())
+                                            },
                                             |m| this.dates.format(m),
                                         ),
                                     ))
@@ -1836,7 +1953,9 @@ impl Browser {
                 }),
             )
             .child(header)
-            .child(if self.entries.is_empty() && !self.query.is_empty() {
+            .child(if let Some(notice) = self.remote_notice(t, cx) {
+                notice
+            } else if self.entries.is_empty() && !self.query.is_empty() {
                 div()
                     .flex_1()
                     .flex()
@@ -1853,8 +1972,17 @@ impl Browser {
     fn status_bar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
         // Clickable path: each component jumps to that ancestor.
         let mut crumbs = Vec::new();
-        let mut acc = PathBuf::from("/");
-        crumbs.push(("Macintosh HD".to_string(), acc.clone()));
+        // On a server, places are written "ssh://host/path" (that is what going there takes).
+        let mut acc = match &self.remote {
+            Some(host) => PathBuf::from(format!("ssh://{host}/")),
+            None => PathBuf::from("/"),
+        };
+        crumbs.push((
+            self.remote
+                .clone()
+                .unwrap_or_else(|| "Macintosh HD".to_string()),
+            acc.clone(),
+        ));
         for part in self.cwd.components().skip(1) {
             acc.push(part);
             crumbs.push((part.as_os_str().to_string_lossy().into_owned(), acc.clone()));
@@ -1882,7 +2010,11 @@ impl Browser {
                 .hover(|d| d.bg(t.hover))
                 .on_click(cx.listener(move |this, _, _, cx| this.go_to(path.clone(), cx)))
                 .child(name);
-            bar = bar.child(Self::drop_target(crumb, dest, t, cx));
+            bar = if self.remote.is_some() {
+                bar.child(crumb)
+            } else {
+                bar.child(Self::drop_target(crumb, dest, t, cx))
+            };
         }
 
         let count = self.entries.len();

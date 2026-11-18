@@ -236,6 +236,54 @@ impl Browser {
         .detach();
     }
 
+    /// Run `work` in the background with a progress bar, then call `done` with its result.
+    pub(super) fn background_job<R: Send + 'static>(
+        &mut self,
+        label: String,
+        work: impl FnOnce(&Progress) -> Result<R, String> + Send + 'static,
+        done: impl FnOnce(&mut Browser, Result<R, String>, &mut Context<Browser>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let progress = Arc::new(Progress::default());
+        let id = self.next_job;
+        self.next_job += 1;
+        self.jobs.push(RunningJob {
+            id,
+            label,
+            progress: progress.clone(),
+        });
+        cx.notify();
+
+        let ticking = progress.clone();
+        cx.spawn(async move |this, cx| {
+            while !ticking.is_finished() {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |this, cx| {
+            let p = progress.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { work(&p) })
+                .await;
+            progress.finish();
+            this.update(cx, |this, cx| {
+                this.jobs.retain(|j| j.id != id);
+                done(this, result, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Zip the selection.
     pub(super) fn compress_selection(&mut self, cx: &mut Context<Self>) {
         let items = self.selected_paths();
