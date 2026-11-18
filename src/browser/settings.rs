@@ -3,7 +3,7 @@
 use gpui::{AnyElement, FontWeight, transparent_black};
 
 use super::*;
-use crate::config::{Accent, ClaudeModel, Density, ThemeMode};
+use crate::config::{Accent, ClaudeModel, Density, IconStyle, ThemeMode};
 
 impl Browser {
     pub(super) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -50,6 +50,22 @@ impl Browser {
                 "Accent color",
                 "Selection and highlights.",
                 self.accent_picker(t, cx),
+            ),
+            self.row(
+                t,
+                "File icons",
+                "Advanced tells types apart: PDF, sheets, code by language…",
+                self.segmented(
+                    t,
+                    "icon-style",
+                    IconStyle::ALL
+                        .iter()
+                        .map(|m| (*m, m.label().into()))
+                        .collect(),
+                    c.icon_style,
+                    |c, v| c.icon_style = v,
+                    cx,
+                ),
             ),
             self.row(
                 t,

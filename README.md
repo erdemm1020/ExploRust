@@ -4,7 +4,8 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 
 ## Fonctionnalités
 
-- Sidebar (Home, Desktop, Documents, Downloads, Applications)
+- Sidebar redimensionnable (glisse son bord), repliable en simple rangée d'icônes (double-clic sur le bord ou `⌘⌥S`)
+- Icônes par type de fichier : simples ou avancées (PDF rouge, tableur vert, code coloré par langage, dossiers Téléchargements / Images / Musique…)
 - Navigation précédent / suivant / dossier parent
 - Liste Nom / Date de modification / Taille, dossiers en premier
 - Barre de recherche : filtre le dossier courant pendant la frappe
@@ -129,6 +130,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘Z` / `⌘⇧Z` | Annuler / rétablir (renommer, déplacer, copier, corbeille, créer, zip) |
 | `⌘I` | Infos : dates, permissions, propriétaire, taille réelle d'un dossier |
 | `⌘K` | Se connecter à un serveur (SSH) |
+| `⌘⌥S` | Replier / ouvrir la sidebar |
 | `⌘A` | Tout sélectionner |
 | `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
 | `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |
@@ -153,13 +155,17 @@ Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changeme
 
 | Section | Option |
 |---|---|
-| Appearance | Thème (système, clair, sombre), couleur d'accent, hauteur des lignes |
+| Appearance | Thème (système, clair, sombre), couleur d'accent, icônes (simples ou avancées), hauteur des lignes |
 | Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, tailles de dossiers, dates relatives |
 | Developer | Interrupteur général des outils développeur, Git, fichiers ignorés en grisé, projets, serveurs SSH, Claude (modèle, clé) |
 | Updates | Vérification automatique des mises à jour, vérification manuelle |
 | Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, éditeur et terminal par défaut |
 
 « Reset to Defaults » remet tout à zéro. Le fichier `~/Library/Application Support/ExploRust/config` peut aussi s'éditer à la main.
+
+## Menu clic droit
+
+Le menu s'adapte à ses libellés (jamais coupés), et se pilote aussi au clavier : `↑` `↓` pour choisir, `Entrée` pour valider, `→` / `←` pour ouvrir ou fermer un sous-menu, `Échap` pour fermer.
 
 ## Annuler, progression, archives, infos
 

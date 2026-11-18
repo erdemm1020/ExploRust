@@ -6,6 +6,7 @@ mod claude;
 mod clipboard;
 mod config;
 mod dates;
+mod file_icons;
 mod fs;
 mod git;
 mod info;

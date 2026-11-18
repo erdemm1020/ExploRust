@@ -2003,7 +2003,7 @@ impl Browser {
                         } else {
                             (t.text, t.dim)
                         };
-                        let icon = entry_icon(entry, t);
+                        let icon = entry_icon(entry, t, this.config.icon_style);
                         let is_dir = entry.is_dir;
                         let row_h = this.config.density.row_height();
                         let drag_paths = if selected {
@@ -2262,33 +2262,19 @@ fn icon(name: &'static str, color: gpui::Rgba) -> gpui::Svg {
         .text_color(color)
 }
 
-/// Icon for a list entry, picked from the file extension.
-fn entry_icon(entry: &fs::Entry, t: Theme) -> gpui::Svg {
-    if entry.is_dir {
-        return icon("icons/folder.svg", t.folder);
-    }
-    let ext = entry
-        .path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let name = match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "svg" | "bmp" | "tiff" | "ico" => {
-            "icons/image.svg"
-        }
-        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" | "mp4" | "mov" | "mkv" | "avi" | "webm" => {
-            "icons/media.svg"
-        }
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "dmg" | "pkg" => {
-            "icons/archive.svg"
-        }
-        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "java" | "swift"
-        | "sh" | "json" | "toml" | "yaml" | "yml" | "html" | "css" | "kt" | "rb" => {
-            "icons/code.svg"
-        }
-        _ => "icons/file.svg",
+/// Icon for a list entry: its type, in the style the user picked.
+fn entry_icon(entry: &fs::Entry, t: Theme, style: crate::config::IconStyle) -> gpui::Svg {
+    let look = crate::file_icons::for_item(&entry.name, entry.is_dir, style);
+    let color = look
+        .color
+        .map_or(if entry.is_dir { t.folder } else { t.file }, gpui::rgb);
+    // Colored icons are a little bigger: their glyph has to be seen.
+    let size = if style == crate::config::IconStyle::Advanced {
+        20.0
+    } else {
+        18.0
     };
-    icon(name, t.file)
+    icon(look.asset, color).size(px(size))
 }
 
 /// Text with its selection highlighted and, if `caret`, the caret drawn.
