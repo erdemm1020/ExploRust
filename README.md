@@ -73,6 +73,9 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⇧` + clic | Sélectionner une plage |
 | `⌘` + clic | Ajouter / retirer un élément de la sélection |
 | `⌘A` | Tout sélectionner |
+| `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
+| `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |
+| `⌘⌥C` | Copier le chemin du fichier (texte) |
 | `Échap` | Désélectionner |
 | `⌘↑` | Dossier parent |
 | `⌘↓` | Ouvrir la sélection |
@@ -82,7 +85,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | Glisser-déposer | Déplacer vers un dossier, la sidebar ou le chemin du bas |
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
-| Clic droit sur un élément | Ouvrir, révéler dans le Finder, Open With (choisir une app, ou la définir par défaut), ouvrir un dossier dans le terminal, copier le chemin, renommer, mettre à la corbeille |
+| Clic droit sur un élément | Ouvrir, révéler dans le Finder, Copy / Paste Item, Open With (choisir une app, ou la définir par défaut), ouvrir un dossier dans le terminal, copier le chemin, renommer, mettre à la corbeille |
 | Clic droit dans le vide | Nouveau dossier (renommé aussitôt), ouvrir le terminal ici (ou « Open in… » pour en choisir un autre), afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
 

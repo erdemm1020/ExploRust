@@ -12,6 +12,7 @@ use gpui::{
 
 use crate::{
     apps::{self, AppInfo},
+    clipboard,
     config::Config,
     fs,
     text_field::TextField,
@@ -54,7 +55,9 @@ impl Render for DragPreview {
 enum MenuAction {
     Open,
     Reveal,
+    Copy,
     CopyPath,
+    Paste,
     OpenWith,
     OpenTerminal,
     TerminalChoices,
@@ -324,6 +327,14 @@ impl Browser {
             .filter_map(|&ix| self.entries.get(ix))
             .collect();
         let single = selected.len() == 1;
+        let pasted = clipboard::files().len();
+        let paste = (pasted > 0).then(|| {
+            let label = match pasted {
+                1 => "Paste Item".to_string(),
+                n => format!("Paste {n} Items"),
+            };
+            item(&label, Paste)
+        });
 
         let mut entries = Vec::new();
         if on_item {
@@ -336,7 +347,11 @@ impl Browser {
                 entries.extend(terminal);
             }
             entries.push(MenuEntry::Separator);
+            entries.push(item("Copy", Copy));
             entries.push(item("Copy Path", CopyPath));
+            if single && selected[0].is_dir {
+                entries.extend(paste);
+            }
             if single {
                 entries.push(item("Rename", Rename));
             }
@@ -349,6 +364,7 @@ impl Browser {
                 "Show Hidden Files"
             };
             entries.push(item("New Folder", NewFolder));
+            entries.extend(paste);
             entries.extend(terminal);
             entries.push(MenuEntry::Separator);
             entries.push(item(hidden, ToggleHidden));
@@ -371,7 +387,7 @@ impl Browser {
     }
 
     /// A single selected folder, else the folder being browsed.
-    fn terminal_dir(&self) -> PathBuf {
+    fn target_dir(&self) -> PathBuf {
         match self.selected_paths().as_slice() {
             [p] if p.is_dir() => p.clone(),
             _ => self.cwd.clone(),
@@ -417,7 +433,7 @@ impl Browser {
                         kind,
                         apps: terminals,
                         default: Some(default.path),
-                        subject: self.terminal_dir(),
+                        subject: self.target_dir(),
                     })
                 }
             }
@@ -504,18 +520,15 @@ impl Browser {
                     cx.reveal_path(&path);
                 }
             }
-            MenuAction::CopyPath => {
-                let text = self
-                    .selected_paths()
-                    .iter()
-                    .map(|p| p.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            MenuAction::Copy => self.copy_selection(),
+            MenuAction::CopyPath => self.copy_selection_path(cx),
+            MenuAction::Paste => {
+                let dest = self.target_dir();
+                self.paste(&dest, false, cx)
             }
             MenuAction::OpenWith | MenuAction::TerminalChoices => {}
             MenuAction::OpenTerminal => {
-                apps::open_with(&[self.terminal_dir()], &self.terminal().path)
+                apps::open_with(&[self.target_dir()], &self.terminal().path)
             }
             MenuAction::Rename => self.begin_rename(),
             MenuAction::Trash => {
@@ -612,12 +625,60 @@ impl Browser {
 
     /// Move (or copy) dropped paths into `dest`, then refresh the listing.
     fn drop_paths(&mut self, paths: &[PathBuf], dest: &Path, copy: bool, cx: &mut Context<Self>) {
-        for path in paths {
-            // A failed item (permissions, ...) must not stop the others.
-            let _ = fs::transfer(path, dest, copy);
-        }
+        // A failed item (permissions, ...) must not stop the others.
+        let created: Vec<PathBuf> = paths
+            .iter()
+            .filter_map(|p| fs::transfer(p, dest, copy).ok())
+            .collect();
         self.reload();
+        // Like Finder, what just landed in this folder is selected.
+        if dest == self.cwd {
+            self.select_paths(&created);
+        }
         cx.notify();
+    }
+
+    fn select_paths(&mut self, paths: &[PathBuf]) {
+        self.selected = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| paths.contains(&e.path))
+            .map(|(ix, _)| ix)
+            .collect();
+        self.anchor = self.selected.first().copied();
+        self.cursor = self.selected.last().copied();
+        if let Some(&ix) = self.selected.first() {
+            self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        }
+    }
+
+    /// ⌘C: put the selected files on the system pasteboard.
+    fn copy_selection(&mut self) {
+        let paths = self.selected_paths();
+        if !paths.is_empty() {
+            clipboard::copy_files(&paths);
+        }
+    }
+
+    fn copy_selection_path(&mut self, cx: &mut Context<Self>) {
+        let text = self
+            .selected_paths()
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Copy (or move, with `mv`) the pasteboard files into `dest`.
+    fn paste(&mut self, dest: &Path, mv: bool, cx: &mut Context<Self>) {
+        let files = clipboard::files();
+        if !files.is_empty() {
+            self.drop_paths(&files, dest, !mv, cx);
+        }
     }
 
     /// Make `el` a drop target: dragged rows are moved in (⌥ copies),
@@ -683,6 +744,15 @@ impl Browser {
             "a" if cmd => {
                 self.select_all();
                 cx.notify();
+            }
+            // ⌘⌥C copies the path as text, like Finder.
+            "c" if cmd && k.modifiers.alt => self.copy_selection_path(cx),
+            "c" if cmd => self.copy_selection(),
+            // ⌘⌥V moves instead of copying, like Finder's "Move Item Here".
+            // Keyboard paste always goes to the folder being browsed.
+            "v" if cmd => {
+                let dest = self.cwd.clone();
+                self.paste(&dest, k.modifiers.alt, cx)
             }
             "escape" => {
                 if self.menu.take().is_none() {
