@@ -1,7 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use gpui::{
-    ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton,
+    ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Modifiers, MouseButton,
     NavigationDirection, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
     WindowControlArea, div, prelude::*, px, svg, uniform_list,
 };
@@ -21,7 +24,11 @@ struct Place {
 pub struct Browser {
     cwd: PathBuf,
     entries: Vec<fs::Entry>,
-    selected: Option<usize>,
+    selected: BTreeSet<usize>,
+    /// Fixed end of a shift-selection.
+    anchor: Option<usize>,
+    /// Moving end: where the arrow keys continue from.
+    cursor: Option<usize>,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     show_hidden: bool,
@@ -68,7 +75,9 @@ impl Browser {
         let mut this = Self {
             cwd: home,
             entries: Vec::new(),
-            selected: None,
+            selected: BTreeSet::new(),
+            anchor: None,
+            cursor: None,
             back: Vec::new(),
             forward: Vec::new(),
             show_hidden: false,
@@ -83,7 +92,7 @@ impl Browser {
     fn reload(&mut self) {
         // An unreadable folder (permissions) just shows up empty.
         self.entries = fs::read_dir(&self.cwd, self.show_hidden).unwrap_or_default();
-        self.selected = None;
+        self.clear_selection();
     }
 
     fn go_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -122,35 +131,87 @@ impl Browser {
     }
 
     fn select_path(&mut self, path: &Path) {
-        self.selected = self.entries.iter().position(|e| e.path == path);
-        if let Some(ix) = self.selected {
+        if let Some(ix) = self.entries.iter().position(|e| e.path == path) {
+            self.select_only(ix);
             self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
         }
     }
 
-    fn open(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(entry) = self.entries.get(ix) else {
-            return;
-        };
-        let path = entry.path.clone();
-        if entry.is_dir {
-            self.go_to(path, cx);
+    fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.anchor = None;
+        self.cursor = None;
+    }
+
+    fn select_only(&mut self, ix: usize) {
+        self.selected.clear();
+        self.selected.insert(ix);
+        self.anchor = Some(ix);
+        self.cursor = Some(ix);
+    }
+
+    /// Select everything between the anchor and `ix`.
+    fn select_range_to(&mut self, ix: usize) {
+        let anchor = self.anchor.unwrap_or(ix);
+        self.selected = (anchor.min(ix)..=anchor.max(ix)).collect();
+        self.anchor = Some(anchor);
+        self.cursor = Some(ix);
+    }
+
+    fn select_all(&mut self) {
+        self.selected = (0..self.entries.len()).collect();
+        self.anchor = self.selected.first().copied();
+        self.cursor = self.selected.last().copied();
+    }
+
+    /// Mouse click: ⌘ toggles, ⇧ extends, plain replaces.
+    fn click(&mut self, ix: usize, m: Modifiers) {
+        if m.platform {
+            if !self.selected.remove(&ix) {
+                self.selected.insert(ix);
+            }
+            self.anchor = Some(ix);
+            self.cursor = Some(ix);
+        } else if m.shift {
+            self.select_range_to(ix);
         } else {
-            cx.open_with_system(&path);
+            self.select_only(ix);
         }
     }
 
-    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+    /// A single folder is entered; files are opened with their default app.
+    fn open_selected(&mut self, cx: &mut Context<Self>) {
+        let targets: Vec<(PathBuf, bool)> = self
+            .selected
+            .iter()
+            .filter_map(|&ix| self.entries.get(ix))
+            .map(|e| (e.path.clone(), e.is_dir))
+            .collect();
+        match targets.as_slice() {
+            [(path, true)] => self.go_to(path.clone(), cx),
+            _ => {
+                for (path, _) in targets.iter().filter(|(_, is_dir)| !is_dir) {
+                    cx.open_with_system(path);
+                }
+            }
+        }
+    }
+
+    fn move_selection(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
         if self.entries.is_empty() {
             return;
         }
         let last = self.entries.len() - 1;
-        let ix = match self.selected {
+        let ix = match self.cursor {
             None if delta > 0 => 0,
             None => last,
             Some(cur) => cur.saturating_add_signed(delta).min(last),
         };
-        self.selected = Some(ix);
+        if extend {
+            self.select_range_to(ix);
+        } else {
+            self.select_only(ix);
+        }
         let strategy = if delta > 0 {
             ScrollStrategy::Bottom
         } else {
@@ -165,17 +226,17 @@ impl Browser {
         let cmd = k.modifiers.platform;
         match k.key.as_str() {
             "up" if cmd => self.go_up(cx),
-            "down" if cmd => {
-                if let Some(ix) = self.selected {
-                    self.open(ix, cx);
-                }
+            "down" if cmd => self.open_selected(cx),
+            "up" => self.move_selection(-1, k.modifiers.shift, cx),
+            "down" => self.move_selection(1, k.modifiers.shift, cx),
+            "enter" => self.open_selected(cx),
+            "a" if cmd => {
+                self.select_all();
+                cx.notify();
             }
-            "up" => self.move_selection(-1, cx),
-            "down" => self.move_selection(1, cx),
-            "enter" => {
-                if let Some(ix) = self.selected {
-                    self.open(ix, cx);
-                }
+            "escape" => {
+                self.clear_selection();
+                cx.notify();
             }
             "[" if cmd => self.go_back(cx),
             "]" if cmd => self.go_forward(cx),
@@ -342,7 +403,7 @@ impl Browser {
                 range
                     .filter_map(|ix| {
                         let entry = this.entries.get(ix)?;
-                        let selected = this.selected == Some(ix);
+                        let selected = this.selected.contains(&ix);
                         let (fg, dim) = if selected {
                             (t.on_accent, t.on_accent)
                         } else {
@@ -364,9 +425,10 @@ impl Browser {
                                     .when(selected, |d| d.bg(t.accent))
                                     .when(!selected, |d| d.hover(|d| d.bg(t.hover)))
                                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                                        this.selected = Some(ix);
-                                        if ev.click_count() >= 2 {
-                                            this.open(ix, cx);
+                                        let m = ev.modifiers();
+                                        this.click(ix, m);
+                                        if ev.click_count() >= 2 && !m.platform && !m.shift {
+                                            this.open_selected(cx);
                                         }
                                         cx.notify();
                                     }))
@@ -440,6 +502,10 @@ impl Browser {
         }
 
         let count = self.entries.len();
+        let status = match self.selected.len() {
+            0 => format!("{count} items"),
+            n => format!("{n} of {count} selected"),
+        };
         div()
             .h(px(28.0))
             .flex_none()
@@ -453,7 +519,7 @@ impl Browser {
             .border_t_1()
             .border_color(t.border)
             .child(bar)
-            .child(div().flex_none().child(format!("{count} items")))
+            .child(div().flex_none().child(status))
     }
 }
 

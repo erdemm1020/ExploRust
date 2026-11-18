@@ -64,8 +64,13 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 
 | Raccourci | Action |
 |---|---|
-| Double-clic, `Enter` | Ouvrir le dossier ou fichier sélectionné |
+| Double-clic, `Enter` | Ouvrir la sélection (un dossier : y entrer ; fichiers : les ouvrir tous) |
 | `↑` / `↓` | Changer la sélection |
+| `⇧↑` / `⇧↓` | Étendre la sélection |
+| `⇧` + clic | Sélectionner une plage |
+| `⌘` + clic | Ajouter / retirer un élément de la sélection |
+| `⌘A` | Tout sélectionner |
+| `Échap` | Désélectionner |
 | `⌘↑` | Dossier parent |
 | `⌘↓` | Ouvrir la sélection |
 | `⌘[` / `⌘]` | Précédent / suivant |
