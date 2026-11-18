@@ -1,6 +1,7 @@
 mod apps;
 mod assets;
 mod browser;
+mod config;
 mod fs;
 mod text_field;
 mod theme;

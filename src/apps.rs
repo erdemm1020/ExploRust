@@ -14,6 +14,14 @@ pub struct AppInfo {
 }
 
 impl AppInfo {
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_stem()?.to_string_lossy().into_owned();
+        Some(Self {
+            name,
+            path: path.to_path_buf(),
+        })
+    }
+
     fn from_url(url: &NSURL) -> Option<Self> {
         let path = PathBuf::from(url.path()?.to_string());
         let name = path.file_stem()?.to_string_lossy().into_owned();
@@ -74,6 +82,31 @@ pub fn set_default(app: &Path, file: &Path) {
         );
 }
 
+/// Terminal apps we look for, by bundle identifier.
+const KNOWN_TERMINALS: &[&str] = &[
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "com.mitchellh.ghostty",
+    "dev.warp.Warp-Stable",
+    "org.alacritty",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "com.raphaelamorim.rio",
+    "co.zeit.hyper",
+    "org.tabby",
+    "dev.commandline.waveterm",
+];
+
+/// Well-known terminal apps that are installed on this Mac.
+pub fn installed_terminals() -> Vec<AppInfo> {
+    let workspace = NSWorkspace::sharedWorkspace();
+    KNOWN_TERMINALS
+        .iter()
+        .filter_map(|id| workspace.URLForApplicationWithBundleIdentifier(&NSString::from_str(id)))
+        .filter_map(|url| AppInfo::from_url(&url))
+        .collect()
+}
+
 /// The Mac's terminal: whatever opens `.command` files (Terminal.app unless
 /// the user picked another one, e.g. Ghostty or iTerm).
 pub fn terminal() -> AppInfo {
@@ -96,6 +129,21 @@ mod tests {
             t.path
         );
         println!("terminal = {} ({})", t.name, t.path.display());
+    }
+
+    #[test]
+    fn finds_terminal_app_installed() {
+        // Terminal.app ships with macOS.
+        let found = installed_terminals();
+        assert!(
+            found.iter().any(|a| a.name == "Terminal"),
+            "{:?}",
+            found.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+        println!(
+            "terminals = {:?}",
+            found.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]
