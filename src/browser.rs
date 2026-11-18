@@ -4,10 +4,10 @@ use std::{
 };
 
 use gpui::{
-    ClickEvent, Context, ExternalPaths, FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent,
-    Modifiers, MouseButton, MouseDownEvent, NavigationDirection, Pixels, Point, Render,
-    ScrollStrategy, SharedString, UniformListScrollHandle, Window, WindowControlArea, div,
-    prelude::*, px, svg, uniform_list,
+    ClickEvent, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Hsla, IntoElement,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, NavigationDirection, Pixels, Point,
+    Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window, WindowControlArea,
+    anchored, deferred, div, prelude::*, px, svg, uniform_list,
 };
 
 use crate::{fs, theme::Theme};
@@ -44,6 +44,26 @@ impl Render for DragPreview {
     }
 }
 
+#[derive(Clone, Copy)]
+enum MenuAction {
+    Open,
+    Reveal,
+    CopyPath,
+    Trash,
+    NewFolder,
+    ToggleHidden,
+}
+
+enum MenuEntry {
+    Item(SharedString, MenuAction),
+    Separator,
+}
+
+struct ContextMenu {
+    position: Point<Pixels>,
+    entries: Vec<MenuEntry>,
+}
+
 struct Place {
     name: SharedString,
     icon: &'static str,
@@ -61,6 +81,7 @@ pub struct Browser {
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     show_hidden: bool,
+    menu: Option<ContextMenu>,
     places: Vec<Place>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
@@ -117,6 +138,7 @@ impl Browser {
             back: Vec::new(),
             forward: Vec::new(),
             show_hidden: false,
+            menu: None,
             places,
             scroll: UniformListScrollHandle::new(),
             focus,
@@ -126,6 +148,7 @@ impl Browser {
     }
 
     fn reload(&mut self) {
+        self.menu = None;
         // An unreadable folder (permissions) just shows up empty.
         self.entries = fs::read_dir(&self.cwd, self.show_hidden).unwrap_or_default();
         self.clear_selection();
@@ -233,6 +256,72 @@ impl Browser {
         }
     }
 
+    /// Open the right-click menu: file actions on a row, folder actions elsewhere.
+    fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
+        use MenuAction::*;
+        let item = |label: &str, action| MenuEntry::Item(label.to_string().into(), action);
+        let entries = if on_item {
+            vec![
+                item("Open", Open),
+                item("Reveal in Finder", Reveal),
+                MenuEntry::Separator,
+                item("Copy Path", CopyPath),
+                MenuEntry::Separator,
+                item("Move to Trash", Trash),
+            ]
+        } else {
+            let hidden = if self.show_hidden {
+                "Hide Hidden Files"
+            } else {
+                "Show Hidden Files"
+            };
+            vec![
+                item("New Folder", NewFolder),
+                MenuEntry::Separator,
+                item(hidden, ToggleHidden),
+            ]
+        };
+        self.menu = Some(ContextMenu { position, entries });
+    }
+
+    fn run_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
+        self.menu = None;
+        match action {
+            MenuAction::Open => self.open_selected(cx),
+            MenuAction::Reveal => {
+                for path in self.selected_paths() {
+                    cx.reveal_path(&path);
+                }
+            }
+            MenuAction::CopyPath => {
+                let text = self
+                    .selected_paths()
+                    .iter()
+                    .map(|p| p.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            MenuAction::Trash => {
+                for path in self.selected_paths() {
+                    let _ = crate::trash::move_to_trash(&path);
+                }
+                self.reload();
+            }
+            MenuAction::NewFolder => {
+                if let Ok(path) = fs::create_folder(&self.cwd) {
+                    self.reload();
+                    self.select_path(&path);
+                }
+            }
+            MenuAction::ToggleHidden => {
+                self.show_hidden = !self.show_hidden;
+                self.reload();
+            }
+        }
+        cx.notify();
+    }
+
     fn selected_paths(&self) -> Vec<PathBuf> {
         self.selected
             .iter()
@@ -309,7 +398,9 @@ impl Browser {
                 cx.notify();
             }
             "escape" => {
-                self.clear_selection();
+                if self.menu.take().is_none() {
+                    self.clear_selection();
+                }
                 cx.notify();
             }
             "[" if cmd => self.go_back(cx),
@@ -373,10 +464,69 @@ impl Render for Browser {
                     .child(self.list(t, cx))
                     .child(self.status_bar(t, cx)),
             )
+            .children(self.context_menu(t, cx))
     }
 }
 
 impl Browser {
+    fn context_menu(&self, t: Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let menu = self.menu.as_ref()?;
+        let entries = menu
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| match entry {
+                MenuEntry::Separator => div()
+                    .h(px(1.0))
+                    .mx_2()
+                    .my_1()
+                    .bg(t.border)
+                    .into_any_element(),
+                MenuEntry::Item(label, action) => {
+                    let action = *action;
+                    div()
+                        .id(("menu-item", i))
+                        .h(px(24.0))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .hover(|d| d.bg(t.accent).text_color(t.on_accent))
+                        .on_click(cx.listener(move |this, _, _, cx| this.run_action(action, cx)))
+                        .child(label.clone())
+                        .into_any_element()
+                }
+            });
+
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.position)
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(
+                        div()
+                            .occlude()
+                            .w(px(210.0))
+                            .p_1()
+                            .flex()
+                            .flex_col()
+                            .rounded_lg()
+                            .bg(t.bg)
+                            .border_1()
+                            .border_color(t.border)
+                            .shadow_lg()
+                            .text_color(t.text)
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.menu = None;
+                                cx.notify();
+                            }))
+                            .children(entries),
+                    ),
+            )
+            .with_priority(1),
+        )
+    }
+
     fn sidebar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let items = self.places.iter().enumerate().map(|(i, place)| {
             let active = place.path == self.cwd;
@@ -523,6 +673,17 @@ impl Browser {
                                             }
                                         }),
                                     )
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                            if !this.selected.contains(&ix) {
+                                                this.select_only(ix);
+                                            }
+                                            this.open_menu(ev.position, true);
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }),
+                                    )
                                     .on_drag(DragPaths(drag_paths), move |_, position, _, cx| {
                                         cx.new(|_| DragPreview {
                                             label: label.clone(),
@@ -576,6 +737,14 @@ impl Browser {
             .on_drop(cx.listener(move |this, d: &ExternalPaths, _, cx| {
                 this.drop_paths(d.paths(), &cwd, true, cx)
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    this.clear_selection();
+                    this.open_menu(ev.position, false);
+                    cx.notify();
+                }),
+            )
             .child(header)
             .child(list)
     }

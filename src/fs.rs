@@ -98,6 +98,13 @@ pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<()> {
     }
 }
 
+/// Create an empty folder named "untitled folder" (numbered if taken).
+pub fn create_folder(dir: &Path) -> io::Result<PathBuf> {
+    let path = unique_path(dir, std::ffi::OsStr::new("untitled folder"));
+    fs::create_dir(&path)?;
+    Ok(path)
+}
+
 fn unique_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     let first = dir.join(name);
     if fs::symlink_metadata(&first).is_err() {
@@ -172,6 +179,16 @@ mod tests {
         transfer(&root.join("src"), &root.join("dest"), true).unwrap();
         assert!(root.join("src/sub/f").exists());
         assert!(root.join("dest/src/sub/f").exists());
+    }
+
+    #[test]
+    fn creates_numbered_folders() {
+        let root = scratch("mkdir");
+        assert_eq!(create_folder(&root).unwrap(), root.join("untitled folder"));
+        assert_eq!(
+            create_folder(&root).unwrap(),
+            root.join("untitled folder 2")
+        );
     }
 
     #[test]
