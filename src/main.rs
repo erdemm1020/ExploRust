@@ -5,9 +5,11 @@ mod clipboard;
 mod config;
 mod dates;
 mod fs;
+mod jobs;
 mod text_field;
 mod theme;
 mod trash;
+mod undo;
 mod updater;
 
 use gpui::{
