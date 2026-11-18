@@ -165,6 +165,8 @@ Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changeme
 
 ## Menu clic droit
 
+« Share with AirDrop… » envoie les fichiers sélectionnés vers un autre appareil Apple (affiché seulement si ce Mac peut faire de l'AirDrop).
+
 Le menu s'adapte à ses libellés (jamais coupés), et se pilote aussi au clavier : `↑` `↓` pour choisir, `Entrée` pour valider, `→` / `←` pour ouvrir ou fermer un sous-menu, `Échap` pour fermer.
 
 ## Annuler, progression, archives, infos

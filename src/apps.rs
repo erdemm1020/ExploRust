@@ -70,6 +70,45 @@ pub fn open_with(paths: &[PathBuf], app: &Path) {
     );
 }
 
+/// The AirDrop sharing service, if this Mac has one.
+fn airdrop_service() -> Option<Retained<objc2_app_kit::NSSharingService>> {
+    // SAFETY: a plain constant exported by AppKit.
+    let name = unsafe { objc2_app_kit::NSSharingServiceNameSendViaAirDrop };
+    objc2_app_kit::NSSharingService::sharingServiceNamed(name)
+}
+
+fn airdrop_items(paths: &[PathBuf]) -> Retained<NSArray> {
+    let urls: Vec<Retained<objc2::runtime::AnyObject>> = paths
+        .iter()
+        .filter_map(|p| file_url(p))
+        // SAFETY: an NSURL is an Objective-C object.
+        .map(|u| unsafe { Retained::cast_unchecked(u) })
+        .collect();
+    NSArray::from_retained_slice(&urls)
+}
+
+/// Can `paths` be sent with AirDrop from here?
+pub fn can_airdrop(paths: &[PathBuf]) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    let Some(service) = airdrop_service() else {
+        return false;
+    };
+    // SAFETY: the items are NSURLs, which sharing services accept.
+    unsafe { service.canPerformWithItems(Some(&airdrop_items(paths))) }
+}
+
+/// Open the AirDrop sheet for `paths`. Must run on the main thread.
+pub fn airdrop(paths: &[PathBuf]) {
+    let Some(service) = airdrop_service() else {
+        return;
+    };
+    let items = airdrop_items(paths);
+    // SAFETY: the items are NSURLs, which sharing services accept.
+    unsafe { service.performWithItems(&items) };
+}
+
 /// Make `app` the default for files of the same type as `file`.
 /// macOS may ask the user to confirm.
 pub fn set_default(app: &Path, file: &Path) {
@@ -204,5 +243,16 @@ mod tests {
             apps.iter().map(|a| &a.name).collect::<Vec<_>>()
         );
         let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn nothing_to_send_means_no_airdrop() {
+        assert!(!can_airdrop(&[]));
+    }
+
+    #[test]
+    fn asking_about_airdrop_never_crashes() {
+        // The answer depends on the Mac (Bluetooth, Wi-Fi...), so only check it returns.
+        let _ = can_airdrop(&[std::env::temp_dir()]);
     }
 }

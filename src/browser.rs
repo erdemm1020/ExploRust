@@ -73,6 +73,7 @@ impl Render for DragPreview {
 enum MenuAction {
     Open,
     Reveal,
+    AirDrop,
     Copy,
     CopyPath,
     Paste,
@@ -679,6 +680,11 @@ impl Browser {
             }
             entries.push(open_in);
             entries.push(MenuEntry::Separator);
+            // Only when this Mac can AirDrop these items.
+            let paths = self.selected_paths();
+            if apps::can_airdrop(&paths) {
+                entries.push(item("Share with AirDrop…", AirDrop));
+            }
             entries.push(item("Get Info", Info));
             entries.push(item("Copy", Copy));
             entries.push(item("Copy Path", CopyPath));
@@ -978,6 +984,7 @@ impl Browser {
                     cx.reveal_path(&path);
                 }
             }
+            MenuAction::AirDrop => apps::airdrop(&self.selected_paths()),
             MenuAction::Copy => self.copy_selection(),
             MenuAction::CopyPath => self.copy_selection_path(cx),
             MenuAction::Paste => {
