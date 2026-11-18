@@ -9,6 +9,7 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "block2", "NSPasteboard", "NSPasteboardItem", "NSColor", "NSColorSpace", "NSApplication", "NSAppearance", "NSResponder"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError", "NSPathUtilities", "NSArray", "NSBundle", "block2", "NSDateFormatter", "NSDate", "NSFormatter"] }
+serde_json = "1.0.154"
 
 [profile.release]
 opt-level = 3

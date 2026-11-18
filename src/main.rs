@@ -8,6 +8,7 @@ mod fs;
 mod text_field;
 mod theme;
 mod trash;
+mod updater;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions,
