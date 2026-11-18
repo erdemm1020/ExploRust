@@ -6,6 +6,7 @@ mod clipboard;
 mod config;
 mod dates;
 mod fs;
+mod git;
 mod info;
 mod jobs;
 mod sizes;
