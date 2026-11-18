@@ -97,14 +97,36 @@ const KNOWN_TERMINALS: &[&str] = &[
     "dev.commandline.waveterm",
 ];
 
-/// Well-known terminal apps that are installed on this Mac.
-pub fn installed_terminals() -> Vec<AppInfo> {
+/// Code editors we look for, by bundle identifier, in order of preference.
+const KNOWN_EDITORS: &[&str] = &[
+    "com.microsoft.VSCode",
+    "dev.zed.Zed",
+    "com.todesktop.230313mzl4w4u92", // Cursor
+    "com.exafunction.windsurf",
+    "com.vscodium",
+    "com.microsoft.VSCodeInsiders",
+    "dev.zed.Zed-Preview",
+    "com.sublimetext.4",
+    "com.panic.Nova",
+];
+
+/// The apps among `ids` that are installed on this Mac, in the same order.
+fn installed(ids: &[&str]) -> Vec<AppInfo> {
     let workspace = NSWorkspace::sharedWorkspace();
-    KNOWN_TERMINALS
-        .iter()
+    ids.iter()
         .filter_map(|id| workspace.URLForApplicationWithBundleIdentifier(&NSString::from_str(id)))
         .filter_map(|url| AppInfo::from_url(&url))
         .collect()
+}
+
+/// Well-known terminal apps that are installed on this Mac.
+pub fn installed_terminals() -> Vec<AppInfo> {
+    installed(KNOWN_TERMINALS)
+}
+
+/// Well-known code editors (VS Code, Zed, Cursor...) that are installed on this Mac.
+pub fn installed_editors() -> Vec<AppInfo> {
+    installed(KNOWN_EDITORS)
 }
 
 /// The Mac's terminal: whatever opens `.command` files (Terminal.app unless
@@ -143,6 +165,30 @@ mod tests {
         println!(
             "terminals = {:?}",
             found.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn editors_are_listed_without_duplicates() {
+        let found = installed_editors();
+        println!(
+            "editors = {:?}",
+            found.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+        let mut paths: Vec<_> = found.iter().map(|a| &a.path).collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), found.len());
+        // Ids are unique and not shared with the terminals.
+        for id in KNOWN_EDITORS {
+            assert!(!KNOWN_TERMINALS.contains(id));
+        }
+        assert_eq!(
+            KNOWN_EDITORS
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            KNOWN_EDITORS.len()
         );
     }
 

@@ -120,6 +120,8 @@ pub struct Config {
     pub skipped_version: Option<String>,
     /// Terminal app chosen by the user (`None`: use the system one).
     pub terminal: Option<PathBuf>,
+    /// Code editor chosen by the user (`None`: the first one found on this Mac).
+    pub editor: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -140,6 +142,7 @@ impl Default for Config {
             check_updates: true,
             skipped_version: None,
             terminal: None,
+            editor: None,
         }
     }
 }
@@ -201,6 +204,7 @@ impl Config {
                 },
                 "last_folder" => c.last_folder = path(value),
                 "terminal" => c.terminal = path(value),
+                "editor" => c.editor = path(value),
                 _ => {}
             }
         }
@@ -230,6 +234,7 @@ impl Config {
         for (key, value) in [
             ("last_folder", &self.last_folder),
             ("terminal", &self.terminal),
+            ("editor", &self.editor),
         ] {
             if let Some(p) = value {
                 out.push_str(&format!("{key} = {}\n", p.display()));
@@ -270,6 +275,7 @@ mod tests {
             check_updates: false,
             skipped_version: Some("0.3.0".into()),
             terminal: Some("/Applications/Ghostty.app".into()),
+            editor: Some("/Applications/Zed.app".into()),
         };
         assert_eq!(Config::parse(&c.render()), c);
     }
