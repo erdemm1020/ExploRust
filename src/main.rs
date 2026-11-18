@@ -1,4 +1,5 @@
 mod apps;
+mod archive;
 mod assets;
 mod browser;
 mod clipboard;
