@@ -10,10 +10,55 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Barre de recherche : filtre le dossier courant pendant la frappe
 - Tri par colonne : clic sur l'en-tête pour trier, nouveau clic pour inverser
 - Chemin cliquable et nombre d'éléments en bas
+- Mises à jour intégrées (fenêtre de proposition, installation en un clic)
 - Thème clair ou sombre automatique, et couleur d'accentuation du système (suivis en direct)
 - Ouverture des fichiers avec l'app par défaut
 
-## Prérequis
+## Installer l'app (DMG)
+
+1. Télécharge `ExploRust-x.y.z.dmg` depuis la page [Releases](https://github.com/erdemm1020/ExploRust/releases).
+2. Ouvre-le et glisse **ExploRust** dans **Applications**.
+3. Au premier lancement, macOS peut refuser d'ouvrir l'app (elle n'est pas notarisée par Apple) : fais un clic droit sur l'app, **Ouvrir**, puis confirme. Ou, dans un terminal :
+
+```sh
+xattr -dr com.apple.quarantine /Applications/ExploRust.app
+```
+
+L'app est universelle (Apple Silicon et Intel) et demande macOS 12 ou plus.
+
+## Mises à jour
+
+ExploRust regarde au démarrage s'il existe une release plus récente. Si oui, une fenêtre propose :
+
+- **Install and Restart** : télécharge le DMG, vérifie sa somme de contrôle (SHA-256) et la signature de l'app, remplace l'app installée, puis la relance ;
+- **Later** : redemandera au prochain lancement ;
+- **Skip This Version** : ne redemande plus pour cette version.
+
+Si l'installation échoue (dossier non modifiable, réseau coupé…), l'ancienne version reste intacte et la fenêtre propose d'ouvrir la page de téléchargement.
+
+Dans **Settings**, la section **Updates** permet de désactiver la vérification automatique ou de lancer **Check for Updates** à la main. La vérification interroge uniquement l'API publique de GitHub, sans rien envoyer sur toi. **Le dépôt doit être public** pour que les releases soient visibles par l'app.
+
+Les mises à jour ne fonctionnent que depuis l'app installée (`ExploRust.app`), pas depuis `cargo run`.
+
+## Publier une release
+
+```sh
+scripts/release.sh 0.2.0          # change la version, commit, crée le tag v0.2.0
+git push && git push origin v0.2.0
+```
+
+Le tag lance le workflow GitHub Actions (`.github/workflows/release.yml`) : il compile l'app universelle, crée `ExploRust-0.2.0.dmg` et son fichier `.sha256`, et publie la release. Les copies d'ExploRust déjà installées proposent alors la mise à jour.
+
+Pour fabriquer l'app et le DMG en local :
+
+```sh
+scripts/bundle.sh      # dist/ExploRust.app
+scripts/make-dmg.sh    # dist/ExploRust-<version>.dmg
+```
+
+## Compiler depuis les sources
+
+### Prérequis
 
 - macOS
 - [Rust](https://rustup.rs) (édition 2024, donc Rust 1.85 ou plus récent)
@@ -32,14 +77,14 @@ sudo xcodebuild -license accept
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
-## Installation
+### Installation
 
 ```sh
 git clone <url-du-repo> ExploRust
 cd ExploRust
 ```
 
-## Lancement
+### Lancement
 
 Mode développement (compilation rapide) :
 
@@ -104,6 +149,7 @@ Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changeme
 |---|---|
 | Appearance | Thème (système, clair, sombre), couleur d'accent, hauteur des lignes |
 | Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, dates relatives |
+| Updates | Vérification automatique des mises à jour, vérification manuelle |
 | Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, terminal |
 
 « Reset to Defaults » remet tout à zéro. Le fichier `~/Library/Application Support/ExploRust/config` peut aussi s'éditer à la main.
