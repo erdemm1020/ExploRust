@@ -16,13 +16,14 @@ use crate::{
     config::Config,
     dates::DateFormat,
     fs::{self, Sort, SortKey},
-    text_field::TextField,
+    text_field::{KeyResult, TextField},
     theme::Theme,
 };
 
 const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
 const DATE_W: f32 = 170.0;
+const SEARCH_W: f32 = 200.0;
 const SIZE_W: f32 = 90.0;
 const SIDEBAR_W: f32 = 180.0;
 
@@ -131,7 +132,11 @@ struct Place {
 
 pub struct Browser {
     cwd: PathBuf,
+    /// Everything in the folder; `entries` is what the search lets through.
+    all: Vec<fs::Entry>,
     entries: Vec<fs::Entry>,
+    query: TextField,
+    search_focused: bool,
     selected: BTreeSet<usize>,
     /// Fixed end of a shift-selection.
     anchor: Option<usize>,
@@ -194,7 +199,10 @@ impl Browser {
 
         let mut this = Self {
             cwd: start,
+            all: Vec::new(),
             entries: Vec::new(),
+            query: TextField::empty(),
+            search_focused: false,
             selected: BTreeSet::new(),
             anchor: None,
             cursor: None,
@@ -218,6 +226,7 @@ impl Browser {
     fn set_sort(&mut self, key: SortKey, cx: &mut Context<Self>) {
         let keep = self.selected_paths();
         self.sort = self.sort.clicked(key);
+        fs::sort_entries(&mut self.all, self.sort);
         fs::sort_entries(&mut self.entries, self.sort);
         // Rows moved: find the selected items again.
         self.select_paths(&keep);
@@ -228,8 +237,29 @@ impl Browser {
         self.menu = None;
         self.renaming = None;
         // An unreadable folder (permissions) just shows up empty.
-        self.entries = fs::read_dir(&self.cwd, self.show_hidden, self.sort).unwrap_or_default();
+        self.all = fs::read_dir(&self.cwd, self.show_hidden, self.sort).unwrap_or_default();
+        self.apply_filter();
+    }
+
+    /// Rebuild the visible list from the search text.
+    fn apply_filter(&mut self) {
+        let needle = self.query.text().trim().to_lowercase();
+        self.entries = if needle.is_empty() {
+            self.all.clone()
+        } else {
+            self.all
+                .iter()
+                .filter(|e| e.matches(&needle))
+                .cloned()
+                .collect()
+        };
         self.clear_selection();
+    }
+
+    /// Leaving a folder leaves its search behind, like Finder.
+    fn clear_search(&mut self) {
+        self.query.clear();
+        self.search_focused = false;
     }
 
     fn go_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -238,6 +268,7 @@ impl Browser {
         }
         self.back.push(std::mem::replace(&mut self.cwd, path));
         self.forward.clear();
+        self.clear_search();
         self.reload();
         cx.notify();
     }
@@ -245,6 +276,7 @@ impl Browser {
     fn go_back(&mut self, cx: &mut Context<Self>) {
         if let Some(prev) = self.back.pop() {
             self.forward.push(std::mem::replace(&mut self.cwd, prev));
+            self.clear_search();
             self.reload();
             cx.notify();
         }
@@ -253,6 +285,7 @@ impl Browser {
     fn go_forward(&mut self, cx: &mut Context<Self>) {
         if let Some(next) = self.forward.pop() {
             self.back.push(std::mem::replace(&mut self.cwd, next));
+            self.clear_search();
             self.reload();
             cx.notify();
         }
@@ -653,35 +686,39 @@ impl Browser {
     }
 
     fn on_rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let k = &ev.keystroke;
-        let (cmd, shift) = (k.modifiers.platform, k.modifiers.shift);
         let Some(r) = self.renaming.as_mut() else {
             return;
         };
-        let f = &mut r.field;
-        match k.key.as_str() {
-            "enter" => return self.commit_rename(cx),
-            "escape" => self.renaming = None,
-            "backspace" => f.backspace(),
-            "delete" => f.delete(),
-            "left" if cmd => f.home(shift),
-            "right" if cmd => f.end(shift),
-            "left" => f.left(shift),
-            "right" => f.right(shift),
-            "a" if cmd => f.select_all(),
-            "v" if cmd => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                    f.insert(&text.replace(['\n', '/'], " "));
-                }
+        let paste = || cx.read_from_clipboard().and_then(|c| c.text());
+        match r.field.handle_key(&ev.keystroke, paste) {
+            KeyResult::Enter => return self.commit_rename(cx),
+            KeyResult::Escape => self.renaming = None,
+            KeyResult::Edited | KeyResult::Ignored => {}
+        }
+        cx.notify();
+    }
+
+    /// Keys while the search box has the focus.
+    fn on_search_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        match ev.keystroke.key.as_str() {
+            // Hand over to the list, on its first row.
+            "down" => {
+                self.search_focused = false;
+                self.move_selection(1, false, cx);
+                return;
             }
-            _ if !cmd && !k.modifiers.control => {
-                if let Some(ch) = k.key_char.as_deref()
-                    && !ch.chars().any(char::is_control)
-                {
-                    f.insert(ch);
-                }
-            }
+            "f" if ev.keystroke.modifiers.platform => return,
             _ => {}
+        }
+        let paste = || cx.read_from_clipboard().and_then(|c| c.text());
+        match self.query.handle_key(&ev.keystroke, paste) {
+            KeyResult::Edited => self.apply_filter(),
+            KeyResult::Enter => self.search_focused = false,
+            KeyResult::Escape => {
+                self.clear_search();
+                self.apply_filter();
+            }
+            KeyResult::Ignored => {}
         }
         cx.notify();
     }
@@ -800,6 +837,9 @@ impl Browser {
         if self.renaming.is_some() {
             return self.on_rename_key(ev, cx);
         }
+        if self.search_focused {
+            return self.on_search_key(ev, cx);
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform;
         match k.key.as_str() {
@@ -810,6 +850,10 @@ impl Browser {
             // Like Finder: Return renames, ⌘O / ⌘↓ opens.
             "enter" => {
                 self.begin_rename();
+                cx.notify();
+            }
+            "f" if cmd => {
+                self.search_focused = true;
                 cx.notify();
             }
             "a" if cmd => {
@@ -832,7 +876,12 @@ impl Browser {
             }
             "escape" => {
                 if self.menu.take().is_none() {
-                    self.clear_selection();
+                    if self.selected.is_empty() && !self.query.is_empty() {
+                        self.clear_search();
+                        self.apply_filter();
+                    } else {
+                        self.clear_selection();
+                    }
                 }
                 cx.notify();
             }
@@ -874,6 +923,11 @@ impl Render for Browser {
             .on_key_down(cx.listener(|this, ev, window, cx| this.on_key(ev, window, cx)))
             // A click anywhere while renaming applies the new name and nothing else.
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                // Clicking elsewhere leaves the search box; clicking it focuses it again.
+                if this.search_focused {
+                    this.search_focused = false;
+                    cx.notify();
+                }
                 if this.renaming.is_some() {
                     this.commit_rename(cx);
                     cx.stop_propagation();
@@ -1163,9 +1217,66 @@ impl Browser {
             .child(
                 div()
                     .ml_2()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(self.title()),
             )
+            .child(self.search_box(t, cx))
+    }
+
+    fn search_box(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.search_focused;
+        div()
+            .id("search")
+            .w(px(SEARCH_W))
+            .h(px(26.0))
+            .flex_none()
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_md()
+            .bg(t.hover)
+            .border_1()
+            .border_color(if focused { t.accent } else { t.hover })
+            .cursor_text()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.search_focused = true;
+                cx.notify();
+            }))
+            .child(icon("icons/search.svg", t.dim).size(px(14.0)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(if self.query.is_empty() && !focused {
+                        div().text_color(t.dim).child("Search").into_any_element()
+                    } else {
+                        text_runs(&self.query, focused, t).into_any_element()
+                    }),
+            )
+            .when(!self.query.is_empty(), |d| {
+                d.child(
+                    div()
+                        .id("search-clear")
+                        .px_1()
+                        .rounded_sm()
+                        .text_color(t.dim)
+                        .cursor_pointer()
+                        .hover(|d| d.text_color(t.text))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.clear_search();
+                            this.apply_filter();
+                            cx.notify();
+                        }))
+                        .child("×"),
+                )
+            })
     }
 
     fn list(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1349,7 +1460,18 @@ impl Browser {
                 }),
             )
             .child(header)
-            .child(list)
+            .child(if self.entries.is_empty() && !self.query.is_empty() {
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(t.dim)
+                    .child("No results")
+                    .into_any_element()
+            } else {
+                list.into_any_element()
+            })
     }
 
     fn status_bar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1389,6 +1511,10 @@ impl Browser {
 
         let count = self.entries.len();
         let status = match self.selected.len() {
+            0 if !self.query.is_empty() => match count {
+                1 => "1 result".to_string(),
+                n => format!("{n} results"),
+            },
             0 => format!("{count} items"),
             n => format!("{n} of {count} selected"),
         };
@@ -1446,12 +1572,31 @@ fn entry_icon(entry: &fs::Entry, t: Theme) -> gpui::Svg {
     icon(name, t.file)
 }
 
-/// The text box shown in place of a name while renaming.
-fn rename_input(field: &TextField, t: Theme) -> impl IntoElement {
+/// Text with its selection highlighted and, if `caret`, the caret drawn.
+fn text_runs(field: &TextField, caret: bool, t: Theme) -> impl IntoElement {
     let text = field.text();
     let (start, end) = field.selection();
-    let caret = || div().w(px(1.0)).h(px(15.0)).flex_none().bg(t.accent);
+    let bar = || div().w(px(1.0)).h(px(15.0)).flex_none().bg(t.accent);
 
+    div()
+        .flex()
+        .items_center()
+        .whitespace_nowrap()
+        .child(text[..start].to_string())
+        .when(caret && field.cursor() == start, |d| d.child(bar()))
+        .child(
+            div()
+                .bg(Hsla::from(t.accent).opacity(0.3))
+                .child(text[start..end].to_string()),
+        )
+        .when(caret && field.cursor() == end && start != end, |d| {
+            d.child(bar())
+        })
+        .child(text[end..].to_string())
+}
+
+/// The text box shown in place of a name while renaming.
+fn rename_input(field: &TextField, t: Theme) -> impl IntoElement {
     div()
         .flex_1()
         .min_w_0()
@@ -1460,19 +1605,10 @@ fn rename_input(field: &TextField, t: Theme) -> impl IntoElement {
         .flex()
         .items_center()
         .overflow_hidden()
-        .whitespace_nowrap()
         .rounded_sm()
         .bg(t.bg)
         .text_color(t.text)
         .border_1()
         .border_color(t.accent)
-        .child(text[..start].to_string())
-        .when(field.cursor() == start, |d| d.child(caret()))
-        .child(
-            div()
-                .bg(Hsla::from(t.accent).opacity(0.3))
-                .child(text[start..end].to_string()),
-        )
-        .when(field.cursor() == end && start != end, |d| d.child(caret()))
-        .child(text[end..].to_string())
+        .child(text_runs(field, true, t))
 }

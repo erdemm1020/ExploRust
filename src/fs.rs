@@ -6,6 +6,7 @@ use std::{
 
 use gpui::SharedString;
 
+#[derive(Clone)]
 pub struct Entry {
     pub name: SharedString,
     pub path: PathBuf,
@@ -17,6 +18,11 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Case-insensitive "name contains", `needle` already lowercase.
+    pub fn matches(&self, needle: &str) -> bool {
+        self.lower.contains(needle)
+    }
+
     pub fn size_label(&self) -> SharedString {
         if self.is_dir {
             "--".into()

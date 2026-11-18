@@ -7,6 +7,7 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Sidebar (Home, Desktop, Documents, Downloads, Applications)
 - Navigation précédent / suivant / dossier parent
 - Liste Nom / Date de modification / Taille, dossiers en premier
+- Barre de recherche : filtre le dossier courant pendant la frappe
 - Tri par colonne : clic sur l'en-tête pour trier, nouveau clic pour inverser
 - Chemin cliquable et nombre d'éléments en bas
 - Thème clair ou sombre automatique
@@ -75,6 +76,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘` + clic | Ajouter / retirer un élément de la sélection |
 | `⌘⇧N` | Nouveau dossier (renommé aussitôt) |
 | `⌘⌫` | Mettre la sélection à la corbeille (confirmation si un dossier contient plus de 100 éléments) |
+| `⌘F` | Rechercher dans le dossier (`↓` passe à la liste, `Échap` efface) |
 | `⌘A` | Tout sélectionner |
 | `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
 | `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |

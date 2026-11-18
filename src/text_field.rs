@@ -1,3 +1,16 @@
+use gpui::Keystroke;
+
+/// What a key press did to a field.
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeyResult {
+    Enter,
+    Escape,
+    /// Text or caret changed.
+    Edited,
+    /// Not a text-editing key: the caller may use it.
+    Ignored,
+}
+
 /// Minimal single-line text editing state: text, caret and selection.
 /// Offsets are byte indexes, always on char boundaries.
 pub struct TextField {
@@ -18,6 +31,52 @@ impl TextField {
             anchor: 0,
             cursor: stem_end,
         }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            text: String::new(),
+            anchor: 0,
+            cursor: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::empty();
+    }
+
+    /// Apply a key press. `paste` is only called for ⌘V.
+    pub fn handle_key(
+        &mut self,
+        k: &Keystroke,
+        paste: impl FnOnce() -> Option<String>,
+    ) -> KeyResult {
+        let (cmd, shift) = (k.modifiers.platform, k.modifiers.shift);
+        match k.key.as_str() {
+            "enter" => return KeyResult::Enter,
+            "escape" => return KeyResult::Escape,
+            "backspace" => self.backspace(),
+            "delete" => self.delete(),
+            "left" if cmd => self.home(shift),
+            "right" if cmd => self.end(shift),
+            "left" => self.left(shift),
+            "right" => self.right(shift),
+            "a" if cmd => self.select_all(),
+            "v" if cmd => match paste() {
+                Some(text) => self.insert(&text.replace('\n', " ")),
+                None => return KeyResult::Ignored,
+            },
+            _ if !cmd && !k.modifiers.control => match k.key_char.as_deref() {
+                Some(ch) if !ch.chars().any(char::is_control) => self.insert(ch),
+                _ => return KeyResult::Ignored,
+            },
+            _ => return KeyResult::Ignored,
+        }
+        KeyResult::Edited
     }
 
     pub fn text(&self) -> &str {
@@ -139,6 +198,37 @@ mod tests {
         f.home(false);
         f.delete();
         assert_eq!(f.text(), "a");
+    }
+
+    fn key(spec: &str) -> Keystroke {
+        Keystroke::parse(spec).unwrap()
+    }
+
+    #[test]
+    fn handles_typing_editing_and_control_keys() {
+        let mut f = TextField::empty();
+        assert!(f.is_empty());
+        for c in ["h", "i"] {
+            let k = Keystroke {
+                key_char: Some(c.into()),
+                ..key(c)
+            };
+            assert_eq!(f.handle_key(&k, || None), KeyResult::Edited);
+        }
+        assert_eq!(f.text(), "hi");
+        assert_eq!(f.handle_key(&key("backspace"), || None), KeyResult::Edited);
+        assert_eq!(f.text(), "h");
+        assert_eq!(
+            f.handle_key(&key("cmd-v"), || Some("a\nb".into())),
+            KeyResult::Edited
+        );
+        assert_eq!(f.text(), "ha b");
+        assert_eq!(f.handle_key(&key("enter"), || None), KeyResult::Enter);
+        assert_eq!(f.handle_key(&key("escape"), || None), KeyResult::Escape);
+        assert_eq!(f.handle_key(&key("up"), || None), KeyResult::Ignored);
+        assert_eq!(f.handle_key(&key("cmd-c"), || None), KeyResult::Ignored);
+        f.clear();
+        assert!(f.is_empty());
     }
 
     #[test]

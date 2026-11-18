@@ -25,6 +25,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "applications",
     "sort-asc",
     "sort-desc",
+    "search",
 ];
 
 pub struct Assets;
