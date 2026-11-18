@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
@@ -18,6 +19,10 @@ pub struct Entry {
 }
 
 impl Entry {
+    fn file_size(&self) -> u64 {
+        if self.is_dir { 0 } else { self.size }
+    }
+
     /// Case-insensitive "name contains", `needle` already lowercase.
     pub fn matches(&self, needle: &str) -> bool {
         self.lower.contains(needle)
@@ -43,6 +48,9 @@ pub enum SortKey {
 pub struct Sort {
     pub key: SortKey,
     pub ascending: bool,
+    /// "file2" before "file10" instead of plain letter order.
+    pub natural: bool,
+    pub folders_on_top: bool,
 }
 
 impl Sort {
@@ -51,6 +59,16 @@ impl Sort {
         Self {
             key,
             ascending: key == SortKey::Name,
+            natural: true,
+            folders_on_top: true,
+        }
+    }
+
+    pub fn with_options(self, natural: bool, folders_on_top: bool) -> Self {
+        Self {
+            natural,
+            folders_on_top,
+            ..self
         }
     }
 
@@ -63,21 +81,78 @@ impl Sort {
                 ..self
             }
         } else {
-            Self::by(key)
+            Self {
+                key,
+                ascending: key == SortKey::Name,
+                ..self
+            }
         }
     }
 }
 
-/// Folders always stay on top; the sort applies inside each group.
+/// Letters in order, but runs of digits compare as numbers:
+/// "file2" < "file10", and "a01" is just after "a1".
+pub fn natural_cmp(a: &str, b: &str) -> Ordering {
+    fn digits(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+        let mut run = String::new();
+        while let Some(&c) = chars.peek().filter(|c| c.is_ascii_digit()) {
+            run.push(c);
+            chars.next();
+        }
+        run
+    }
+
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, _) => return Ordering::Less,
+            (_, None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (na, nb) = (digits(&mut a), digits(&mut b));
+                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                // A longer number (without leading zeros) is a bigger number.
+                let ord = ta
+                    .len()
+                    .cmp(&tb.len())
+                    .then_with(|| ta.cmp(tb))
+                    .then_with(|| na.len().cmp(&nb.len()));
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(&y);
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
+}
+
+/// Folders stay on top (if asked); the sort applies inside each group.
 pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
+    let by_name = |a: &Entry, b: &Entry| {
+        if sort.natural {
+            natural_cmp(&a.lower, &b.lower)
+        } else {
+            a.lower.cmp(&b.lower)
+        }
+    };
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then_with(|| {
+        let groups = if sort.folders_on_top {
+            b.is_dir.cmp(&a.is_dir)
+        } else {
+            Ordering::Equal
+        };
+        groups.then_with(|| {
             let primary = match sort.key {
-                SortKey::Name => a.lower.cmp(&b.lower),
+                SortKey::Name => by_name(a, b),
                 SortKey::Modified => a.modified.cmp(&b.modified),
-                // Folders have no size: they stay in name order.
-                SortKey::Size if a.is_dir => return a.lower.cmp(&b.lower),
-                SortKey::Size => a.size.cmp(&b.size),
+                // Folders have no size: they count as empty, so they tie.
+                SortKey::Size => a.file_size().cmp(&b.file_size()),
             };
             let primary = if sort.ascending {
                 primary
@@ -85,7 +160,7 @@ pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
                 primary.reverse()
             };
             // Ties always fall back to A to Z, whatever the direction.
-            primary.then_with(|| a.lower.cmp(&b.lower))
+            primary.then_with(|| by_name(a, b))
         })
     });
 }
@@ -313,8 +388,8 @@ mod tests {
         assert_eq!(by(Sort::by(SortKey::Name)), "Adir,zdir,a.txt,b.txt,C.txt");
         assert_eq!(
             by(Sort {
-                key: SortKey::Name,
-                ascending: false
+                ascending: false,
+                ..Sort::by(SortKey::Name)
             }),
             "zdir,Adir,C.txt,b.txt,a.txt"
         );
@@ -325,8 +400,8 @@ mod tests {
         );
         assert_eq!(
             by(Sort {
-                key: SortKey::Modified,
-                ascending: true
+                ascending: true,
+                ..Sort::by(SortKey::Modified)
             }),
             "Adir,zdir,C.txt,b.txt,a.txt"
         );
@@ -334,10 +409,46 @@ mod tests {
         assert_eq!(by(Sort::by(SortKey::Size)), "Adir,zdir,b.txt,a.txt,C.txt");
         assert_eq!(
             by(Sort {
-                key: SortKey::Size,
-                ascending: true
+                ascending: true,
+                ..Sort::by(SortKey::Size)
             }),
             "Adir,zdir,C.txt,a.txt,b.txt"
+        );
+    }
+
+    #[test]
+    fn natural_order_compares_numbers_by_value() {
+        fn sorted(mut v: Vec<&str>) -> Vec<&str> {
+            v.sort_by(|a, b| natural_cmp(a, b));
+            v
+        }
+        assert_eq!(
+            sorted(vec!["file10", "file2", "file1", "file20"]),
+            ["file1", "file2", "file10", "file20"]
+        );
+        assert_eq!(sorted(vec!["a10b", "a9z", "a9"]), ["a9", "a9z", "a10b"]);
+        assert_eq!(sorted(vec!["a01", "a1", "a"]), ["a", "a1", "a01"]);
+        assert_eq!(sorted(vec!["b", "a2", "a10"]), ["a2", "a10", "b"]);
+    }
+
+    #[test]
+    fn natural_and_folder_options_change_the_order() {
+        let root = scratch("opts");
+        fs::create_dir(root.join("dir")).unwrap();
+        for f in ["f10", "f2", "a"] {
+            fs::write(root.join(f), "").unwrap();
+        }
+        let by = |sort: Sort| names(&read_dir(&root, false, sort).unwrap()).join(",");
+        let name = Sort::by(SortKey::Name);
+        assert_eq!(by(name), "dir,a,f2,f10");
+        assert_eq!(by(name.with_options(false, true)), "dir,a,f10,f2");
+        assert_eq!(by(name.with_options(true, false)), "a,dir,f2,f10");
+        // The options survive a click on another column.
+        assert!(
+            !name
+                .with_options(false, false)
+                .clicked(SortKey::Size)
+                .natural
         );
     }
 
