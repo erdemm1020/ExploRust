@@ -11,6 +11,7 @@ impl Browser {
         if self.settings_open {
             // Looked up once here, not at every repaint.
             self.terminals = apps::installed_terminals();
+            self.editors = apps::installed_editors();
         }
         cx.notify();
     }
@@ -112,6 +113,19 @@ impl Browser {
             terminals.push((Some(custom.clone()), app.name.into()));
         }
 
+        let mut editors: Vec<(Option<PathBuf>, SharedString)> = vec![(None, "Auto".into())];
+        editors.extend(
+            self.editors
+                .iter()
+                .map(|a| (Some(a.path.clone()), a.name.clone().into())),
+        );
+        if let Some(custom) = c.editor.as_ref()
+            && !editors.iter().any(|(p, _)| p.as_ref() == Some(custom))
+            && let Some(app) = AppInfo::from_path(custom)
+        {
+            editors.push((Some(custom.clone()), app.name.into()));
+        }
+
         let behavior = vec![
             self.switch_row(
                 t,
@@ -155,6 +169,19 @@ impl Browser {
                     ],
                     c.trash_warning,
                     |c, v| c.trash_warning = v,
+                    cx,
+                ),
+            ),
+            self.row(
+                t,
+                "Editor",
+                "Used by “Open in …”. Auto picks the first one found.",
+                self.segmented(
+                    t,
+                    "editor",
+                    editors,
+                    c.editor.clone(),
+                    |c, v| c.editor = v,
                     cx,
                 ),
             ),

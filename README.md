@@ -137,7 +137,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
 | Clic sur un en-tête de colonne | Trier par Name, Date Modified ou Size (un 2e clic inverse l'ordre) |
-| Clic droit sur un élément | Ouvrir, révéler dans le Finder, Copy / Paste Item, Open With (choisir une app, ou la définir par défaut), ouvrir un dossier dans le terminal, copier le chemin, renommer, mettre à la corbeille |
+| Clic droit sur un élément | Ouvrir, révéler dans le Finder, Copy / Paste Item, Open With (choisir une app, ou la définir par défaut), ouvrir dans VS Code / Zed / un terminal, copier le chemin, renommer, mettre à la corbeille |
 | Clic droit dans le vide | Nouveau dossier ou nouveau fichier (renommés aussitôt), ouvrir le terminal ici (ou « Open in… » pour en choisir un autre), afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
 
@@ -150,20 +150,31 @@ Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changeme
 | Appearance | Thème (système, clair, sombre), couleur d'accent, hauteur des lignes |
 | Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, dates relatives |
 | Updates | Vérification automatique des mises à jour, vérification manuelle |
-| Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, terminal |
+| Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, éditeur et terminal par défaut |
 
 « Reset to Defaults » remet tout à zéro. Le fichier `~/Library/Application Support/ExploRust/config` peut aussi s'éditer à la main.
+
+## Ouvrir dans un éditeur ou un terminal
+
+Clic droit sur un élément (ou dans le vide) :
+
+- **Open in <éditeur>** ouvre le dossier ou les fichiers dans ton éditeur (VS Code, Zed, Cursor, Windsurf, VSCodium, Sublime Text, Nova…). Par défaut, le premier trouvé sur ton Mac.
+- **Open in <terminal>** ouvre le dossier dans ton terminal.
+- **Open in…** liste tous les éditeurs et terminaux installés : un clic ouvre une fois avec celui-ci, **Set as Default** (au survol) le choisit comme défaut, **Choose Editor… / Choose Terminal…** ouvre le sélecteur du Mac pour une autre app.
+
+Le choix se règle aussi dans **Settings → Behavior → Editor / Terminal**.
 
 ## Terminal par défaut
 
 Par défaut, « Open in Terminal » utilise l'app qui ouvre les fichiers `.command` (Terminal.app sauf réglage contraire).
-Pour en changer : choisis-le dans les réglages, ou clic droit dans un dossier, **Open in…**, puis survole un terminal et clique **Set as Default**
+Pour en changer : choisis-le dans les réglages, ou clic droit, **Open in…** puis **Set as Default**, puis survole un terminal et clique **Set as Default**
 (Terminal, iTerm, Ghostty, Warp, Alacritty, kitty, WezTerm… sont détectés), ou **Choose Application…** pour une autre app.
 
 Le choix est gardé dans `~/Library/Application Support/ExploRust/config` :
 
 ```
 terminal = /Applications/Ghostty.app
+editor = /Applications/Zed.app
 ```
 
 Supprime ce fichier pour revenir au terminal du système.
