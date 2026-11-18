@@ -10,6 +10,9 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Barre de recherche : filtre le dossier courant pendant la frappe
 - Tri par colonne : clic sur l'en-tête pour trier, nouveau clic pour inverser
 - Chemin cliquable et nombre d'éléments en bas
+- Annuler (`⌘Z`), copies et déplacements en arrière-plan avec barre de progression, zip et dézip
+- Taille des dossiers affichée, panneau Infos (`⌘I`)
+- Pour les développeurs (désactivable en un clic) : Git, reconnaissance de projets, serveurs SSH, Claude
 - Mises à jour intégrées (fenêtre de proposition, installation en un clic)
 - Thème clair ou sombre automatique, et couleur d'accentuation du système (suivis en direct)
 - Ouverture des fichiers avec l'app par défaut
@@ -123,6 +126,9 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘⌫` | Mettre la sélection à la corbeille (confirmation si un dossier contient plus de 100 éléments) |
 | `⌘F` | Rechercher dans le dossier (`↓` passe à la liste, `Échap` efface) |
 | `⌘,` | Ouvrir / fermer les réglages (`Échap` ferme) |
+| `⌘Z` / `⌘⇧Z` | Annuler / rétablir (renommer, déplacer, copier, corbeille, créer, zip) |
+| `⌘I` | Infos : dates, permissions, propriétaire, taille réelle d'un dossier |
+| `⌘K` | Se connecter à un serveur (SSH) |
 | `⌘A` | Tout sélectionner |
 | `⌘C` / `⌘V` | Copier / coller des fichiers (compatible avec le vrai Finder et les autres apps) |
 | `⌘⌥V` | Déplacer ici les fichiers copiés (au lieu de les copier) |
@@ -148,11 +154,29 @@ Clique sur **Settings** en bas à gauche de la sidebar (ou `⌘,`). Les changeme
 | Section | Option |
 |---|---|
 | Appearance | Thème (système, clair, sombre), couleur d'accent, hauteur des lignes |
-| Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, dates relatives |
+| Files | Tri naturel (`file2` avant `file10`), dossiers en haut, fichiers cachés, tailles de dossiers, dates relatives |
+| Developer | Interrupteur général des outils développeur, Git, fichiers ignorés en grisé, projets, serveurs SSH, Claude (modèle, clé) |
 | Updates | Vérification automatique des mises à jour, vérification manuelle |
 | Behavior | Ouvrir un dossier d'un clic, rafraîchissement automatique, rouvrir le dernier dossier, seuil d'avertissement avant la corbeille, éditeur et terminal par défaut |
 
 « Reset to Defaults » remet tout à zéro. Le fichier `~/Library/Application Support/ExploRust/config` peut aussi s'éditer à la main.
+
+## Annuler, progression, archives, infos
+
+- **Annuler** : `⌘Z` défait le dernier renommage, déplacement, copie, création, compression ou mise à la corbeille (50 opérations gardées), `⌘⇧Z` le rétablit. Un message en bas confirme.
+- **Copier et déplacer en arrière-plan** : la fenêtre reste utilisable, une barre de progression s'affiche en bas avec un bouton ✕ pour annuler (ce qui a déjà été copié est retiré).
+- **Zip** : clic droit, **Compress** (un élément : `nom.zip`, plusieurs : `Archive.zip`) ou **Extract** sur un `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2` ou `.tar.xz`. Les noms ne sont jamais écrasés.
+- **Tailles de dossiers** : la colonne Size les affiche (calculées en arrière-plan, un dossier à la fois, 4 s maximum chacun). Réglage : *Folder sizes*.
+- **Infos** (`⌘I`, ou clic droit, *Get Info*) : type, taille, dates, permissions, propriétaire, lien, et un bouton pour rendre un fichier exécutable.
+
+## Outils pour développeurs
+
+Réglages, section **Developer** : un interrupteur général *Developer tools* cache tout ce qui suit si tu ne codes pas, et chaque fonction se coupe seule.
+
+- **Git** : lettre de statut à droite du nom (`M` modifié, `A` ajouté, `?` nouveau, `D` supprimé, `R` renommé, `!` conflit, `•` un dossier qui contient des changements), fichiers ignorés par `.gitignore` en grisé, et en bas la branche (`⎇ main ↑2 ↓1 · 3 changes`). Clic droit : *Git: Stage*, *Unstage*, *Discard Changes…* (avec confirmation) et *Open on the Web* (GitHub ou GitLab). Les lectures n'utilisent pas de verrou : elles ne gênent jamais un `git` lancé en parallèle.
+- **Projets** : un petit tag (*Rust*, *Node*, *Go*, *Python*, *Swift*, *Java*, *Ruby*, *PHP*, *Make*) sur les dossiers reconnus. Clic droit sur un projet (ou dans le dossier), les commandes courantes (`cargo run`, `npm run dev`, `go test ./...`…) s'ouvrent dans ton terminal.
+- **Serveurs SSH** : `⌘K` (ou *Connect to Server…* dans la sidebar, ou `ExploRust ssh://hôte/dossier`). Les alias de `~/.ssh/config` apparaissent dans la sidebar. Un dossier distant s'affiche comme un dossier local : ouvrir (télécharge et ouvre), *Download*, renommer, nouveau dossier, supprimer (toujours avec confirmation, sans corbeille), *Open a shell in <terminal>*, et glisser des fichiers dessus pour les envoyer. Utilise `ssh` et `scp` du Mac avec tes clés (pas de mot de passe) ; un serveur inconnu est accepté à la première connexion.
+- **Claude** (désactivé par défaut) : *Explain This*, *Suggest a Name*, *Summarize This Folder* et *Suggest an Organization* dans le clic droit. Active-le dans les réglages, puis copie ta clé d'API (`sk-ant-…`) et clique *Save from Clipboard* : elle est rangée dans le Trousseau macOS, jamais dans un fichier. **Ce qui est envoyé à Anthropic** : uniquement le début (20 ko) du fichier choisi, ou la liste des noms d'un dossier (200 maximum) et le début de son README, et seulement quand tu cliques. Les fichiers qui ressemblent à des secrets (`.env`, clés SSH, `.aws`, trousseaux…) ne sont jamais envoyés. Modèle au choix (Opus 5.5 par défaut, Sonnet 5.5, Haiku 5.5).
 
 ## Ouvrir dans un éditeur ou un terminal
 

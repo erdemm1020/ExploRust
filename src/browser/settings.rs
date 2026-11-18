@@ -18,7 +18,8 @@ impl Browser {
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
             {
-                self.settings_scroll.set_offset(gpui::point(px(0.0), px(-px_down)));
+                self.settings_scroll
+                    .set_offset(gpui::point(px(0.0), px(-px_down)));
             }
         }
         cx.notify();
