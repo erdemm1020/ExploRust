@@ -2,6 +2,7 @@ mod assets;
 mod browser;
 mod fs;
 mod theme;
+mod trash;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions,
