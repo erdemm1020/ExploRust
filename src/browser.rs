@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
     ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render, ScrollStrategy,
-    SharedString, UniformListScrollHandle, Window, WindowControlArea, div, prelude::*, px,
+    SharedString, UniformListScrollHandle, Window, WindowControlArea, div, prelude::*, px, svg,
     uniform_list,
 };
 
@@ -326,9 +326,9 @@ impl Browser {
                             (t.text, t.dim)
                         };
                         let icon = if entry.is_dir {
-                            folder_icon(t.folder)
+                            folder_icon(t.folder).into_any_element()
                         } else {
-                            file_icon(t.file)
+                            file_icon(t.file).into_any_element()
                         };
                         Some(
                             div().w_full().px_2().child(
@@ -438,13 +438,12 @@ impl Browser {
     }
 }
 
-fn folder_icon(color: gpui::Rgba) -> gpui::Div {
-    div()
-        .w(px(18.0))
-        .h(px(14.0))
+fn folder_icon(color: gpui::Rgba) -> gpui::Svg {
+    svg()
+        .path("icons/folder.svg")
+        .size(px(18.0))
         .flex_none()
-        .rounded_sm()
-        .bg(color)
+        .text_color(color)
 }
 
 fn file_icon(color: gpui::Rgba) -> gpui::Div {
