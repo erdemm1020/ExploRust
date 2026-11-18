@@ -250,7 +250,19 @@ impl Browser {
                             .child(section(t, "Files", files))
                             .child(section(t, "Behavior", behavior))
                             .child(section(t, "Updates", self.update_rows(t, cx)))
-                            .child(reset),
+                            .child(reset)
+                            .child(
+                                div()
+                                    .pt_2()
+                                    .flex()
+                                    .justify_center()
+                                    .text_size(px(11.5))
+                                    .text_color(t.dim)
+                                    .child(format!(
+                                        "ExploRust v{} · made with Rust and GPUI",
+                                        crate::updater::VERSION
+                                    )),
+                            ),
                     ),
             )
     }

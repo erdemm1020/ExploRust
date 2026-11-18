@@ -11,20 +11,44 @@ mod trash;
 mod updater;
 
 use gpui::{
-    App, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions,
-    point, prelude::*, px, size,
+    App, Application, Bounds, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions,
+    WindowBounds, WindowOptions, actions, point, prelude::*, px, size,
 };
+use objc2::MainThreadMarker;
+use objc2_app_kit::NSApplication;
 
 use browser::Browser;
 
-actions!(explorust, [Quit]);
+actions!(explorust, [Quit, About, OpenSettings, CheckForUpdates]);
 
 fn main() {
     Application::new()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-,", OpenSettings, None),
+            ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
+            // The standard macOS "About" panel: icon, name and version from Info.plist.
+            cx.on_action(|_: &About, _| {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanel(None);
+                }
+            });
+            cx.set_menus(vec![Menu {
+                name: "ExploRust".into(),
+                items: vec![
+                    MenuItem::action("About ExploRust", About),
+                    MenuItem::separator(),
+                    MenuItem::action("Settings…", OpenSettings),
+                    MenuItem::action("Check for Updates…", CheckForUpdates),
+                    MenuItem::separator(),
+                    MenuItem::os_submenu("Services", SystemMenuType::Services),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit ExploRust", Quit),
+                ],
+            }]);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();

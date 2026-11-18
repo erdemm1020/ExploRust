@@ -61,17 +61,31 @@ impl Browser {
                     self.prompt_update(release, window, cx);
                 }
             }
-            Ok(None) => self.update = UpdateState::UpToDate,
-            // A check nobody asked for fails quietly (no network, GitHub down...).
-            Err(e) => {
-                self.update = if manual {
-                    UpdateState::Failed(e)
-                } else {
-                    UpdateState::Idle
-                };
+            Ok(None) => {
+                self.update = UpdateState::UpToDate;
+                if manual {
+                    self.say(
+                        window,
+                        "ExploRust is up to date",
+                        &format!("You have the latest version ({}).", updater::VERSION),
+                        cx,
+                    );
+                }
             }
+            // A check nobody asked for fails quietly (no network, GitHub down...).
+            Err(e) if manual => {
+                self.say(window, "Could not check for updates", &e, cx);
+                self.update = UpdateState::Failed(e);
+            }
+            Err(_) => self.update = UpdateState::Idle,
         }
         cx.notify();
+    }
+
+    /// A plain message with an OK button.
+    fn say(&mut self, window: &mut Window, message: &str, detail: &str, cx: &mut Context<Self>) {
+        // Nobody needs the answer: there is only one button.
+        let _ = window.prompt(PromptLevel::Info, message, Some(detail), &["OK"], cx);
     }
 
     /// The "new version" pop-up.

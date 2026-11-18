@@ -928,11 +928,8 @@ impl Browser {
         if self.search_focused {
             return self.on_search_key(ev, cx);
         }
-        // ⌘, toggles the settings (the macOS habit); Escape closes them.
+        // ⌘, toggles the settings (an action, see main.rs); Escape closes them.
         let k = &ev.keystroke;
-        if k.key == "," && k.modifiers.platform {
-            return self.toggle_settings(cx);
-        }
         if self.settings_open {
             if k.key == "escape" {
                 self.toggle_settings(cx);
@@ -1019,6 +1016,11 @@ impl Render for Browser {
             .id("root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev, window, cx| this.on_key(ev, window, cx)))
+            // From the menu bar (and ⌘, for the settings).
+            .on_action(cx.listener(|this, _: &crate::OpenSettings, _, cx| this.toggle_settings(cx)))
+            .on_action(cx.listener(|this, _: &crate::CheckForUpdates, window, cx| {
+                this.check_for_updates(true, window, cx)
+            }))
             // A click anywhere while renaming applies the new name and nothing else.
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
                 // Clicking elsewhere leaves the search box; clicking it focuses it again.
@@ -1307,6 +1309,14 @@ impl Browser {
                         ))
                         .child("Settings"),
                 ),
+            )
+            .child(
+                div()
+                    .px_4()
+                    .pb_3()
+                    .text_size(px(11.0))
+                    .text_color(t.dim)
+                    .child(format!("ExploRust v{}", crate::updater::VERSION)),
             )
     }
 
