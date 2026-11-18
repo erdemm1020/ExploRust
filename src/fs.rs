@@ -128,6 +128,17 @@ pub fn create_folder(dir: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Create an empty file named "untitled file" (numbered if taken).
+pub fn create_file(dir: &Path) -> io::Result<PathBuf> {
+    let path = unique_path(dir, std::ffi::OsStr::new("untitled file"));
+    // `create_new` fails instead of truncating if something appeared meanwhile.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    Ok(path)
+}
+
 fn unique_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     let first = dir.join(name);
     if fs::symlink_metadata(&first).is_err() {
@@ -227,6 +238,15 @@ mod tests {
             create_folder(&root).unwrap(),
             root.join("untitled folder 2")
         );
+    }
+
+    #[test]
+    fn creates_numbered_files() {
+        let root = scratch("mkfile");
+        let first = create_file(&root).unwrap();
+        assert_eq!(first, root.join("untitled file"));
+        assert_eq!(fs::metadata(&first).unwrap().len(), 0);
+        assert_eq!(create_file(&root).unwrap(), root.join("untitled file 2"));
     }
 
     #[test]

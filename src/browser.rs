@@ -64,6 +64,7 @@ enum MenuAction {
     Rename,
     Trash,
     NewFolder,
+    NewFile,
     ToggleHidden,
 }
 
@@ -364,6 +365,7 @@ impl Browser {
                 "Show Hidden Files"
             };
             entries.push(item("New Folder", NewFolder));
+            entries.push(item("New File", NewFile));
             entries.extend(paste);
             entries.extend(terminal);
             entries.push(MenuEntry::Separator);
@@ -537,19 +539,23 @@ impl Browser {
                 }
                 self.reload();
             }
-            MenuAction::NewFolder => {
-                if let Ok(path) = fs::create_folder(&self.cwd) {
-                    self.reload();
-                    self.select_path(&path);
-                    self.begin_rename();
-                }
-            }
+            MenuAction::NewFolder => self.create_item(fs::create_folder),
+            MenuAction::NewFile => self.create_item(fs::create_file),
             MenuAction::ToggleHidden => {
                 self.show_hidden = !self.show_hidden;
                 self.reload();
             }
         }
         cx.notify();
+    }
+
+    /// Create something in the current folder, then let the user name it.
+    fn create_item(&mut self, create: fn(&Path) -> std::io::Result<PathBuf>) {
+        if let Ok(path) = create(&self.cwd) {
+            self.reload();
+            self.select_path(&path);
+            self.begin_rename();
+        }
     }
 
     /// Start renaming the selected row, if exactly one is selected.
@@ -743,6 +749,10 @@ impl Browser {
             }
             "a" if cmd => {
                 self.select_all();
+                cx.notify();
+            }
+            "n" if cmd && k.modifiers.shift => {
+                self.create_item(fs::create_file);
                 cx.notify();
             }
             // ⌘⌥C copies the path as text, like Finder.
