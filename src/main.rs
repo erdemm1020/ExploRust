@@ -1,6 +1,7 @@
 mod assets;
 mod browser;
 mod fs;
+mod text_field;
 mod theme;
 mod trash;
 

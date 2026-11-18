@@ -98,6 +98,27 @@ pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<()> {
     }
 }
 
+/// Rename `path` to `new_name` (same folder). Refuses empty names, path
+/// separators and names already taken by another item.
+pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
+    let invalid = |msg| io::Error::new(io::ErrorKind::InvalidInput, msg);
+    if new_name.is_empty() || new_name.contains('/') {
+        return Err(invalid("invalid name"));
+    }
+    let old_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let dest = path.with_file_name(new_name);
+    // The volume is case-insensitive: "a.txt" -> "A.txt" is a legit rename of the same item.
+    let same_item = old_name.to_lowercase() == new_name.to_lowercase();
+    if dest.exists() && !same_item {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "name taken"));
+    }
+    fs::rename(path, &dest)?;
+    Ok(dest)
+}
+
 /// Create an empty folder named "untitled folder" (numbered if taken).
 pub fn create_folder(dir: &Path) -> io::Result<PathBuf> {
     let path = unique_path(dir, std::ffi::OsStr::new("untitled folder"));
@@ -179,6 +200,21 @@ mod tests {
         transfer(&root.join("src"), &root.join("dest"), true).unwrap();
         assert!(root.join("src/sub/f").exists());
         assert!(root.join("dest/src/sub/f").exists());
+    }
+
+    #[test]
+    fn renames_and_refuses_taken_names() {
+        let root = scratch("rename");
+        fs::write(root.join("a.txt"), "a").unwrap();
+        fs::write(root.join("b.txt"), "b").unwrap();
+        assert!(rename(&root.join("a.txt"), "b.txt").is_err());
+        assert!(rename(&root.join("a.txt"), "x/y").is_err());
+        assert!(rename(&root.join("a.txt"), "").is_err());
+        assert_eq!(
+            rename(&root.join("a.txt"), "c.txt").unwrap(),
+            root.join("c.txt")
+        );
+        assert!(root.join("c.txt").exists() && !root.join("a.txt").exists());
     }
 
     #[test]
