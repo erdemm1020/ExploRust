@@ -3,6 +3,7 @@ mod assets;
 mod browser;
 mod clipboard;
 mod config;
+mod dates;
 mod fs;
 mod text_field;
 mod theme;
