@@ -1,0 +1,47 @@
+name: Release
+
+# Push a tag like v0.2.0 and a universal ExploRust-0.2.0.dmg is published as a
+# GitHub release (the running app finds it and offers the update).
+# See scripts/release.sh.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version v$VERSION" >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain (Apple Silicon + Intel)
+        run: |
+          rustup update stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the universal app
+        run: TARGETS="aarch64-apple-darwin x86_64-apple-darwin" scripts/bundle.sh
+
+      - name: Make the DMG
+        run: scripts/make-dmg.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/ExploRust-*.dmg dist/ExploRust-*.dmg.sha256 \
+            --title "ExploRust ${GITHUB_REF_NAME#v}" \
+            --generate-notes
