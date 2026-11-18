@@ -61,9 +61,9 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Move or copy `src` into the folder `dest_dir`. Never overwrites: a name
+/// Move or copy `src` into the folder `dest_dir`, returning the new path. Never overwrites: a name
 /// clash gets a numbered suffix ("name 2.ext").
-pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<()> {
+pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<PathBuf> {
     let name = src
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
@@ -76,23 +76,25 @@ pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<()> {
     }
     // Moving something where it already is: nothing to do.
     if !copy && src.parent() == Some(dest_dir) {
-        return Ok(());
+        return Ok(src.to_path_buf());
     }
 
     let target = unique_path(dest_dir, name);
     if copy {
-        return copy_recursive(src, &target);
+        copy_recursive(src, &target)?;
+        return Ok(target);
     }
     match fs::rename(src, &target) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(target),
         // Different volume: copy, then remove the original.
         Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
             copy_recursive(src, &target)?;
             if src.is_dir() {
-                fs::remove_dir_all(src)
+                fs::remove_dir_all(src)?;
             } else {
-                fs::remove_file(src)
+                fs::remove_file(src)?;
             }
+            Ok(target)
         }
         Err(e) => Err(e),
     }

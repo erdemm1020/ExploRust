@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1.0.104"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "block2", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError", "NSPathUtilities", "NSArray", "NSBundle", "block2"] }
 
 [profile.release]
