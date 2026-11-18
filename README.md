@@ -69,6 +69,7 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘↑` | Dossier parent |
 | `⌘↓` | Ouvrir la sélection |
 | `⌘[` / `⌘]` | Précédent / suivant |
+| Boutons latéraux de la souris | Précédent / suivant |
 | `⌘⇧.` | Afficher / masquer les fichiers cachés |
 | `⌘Q` | Quitter |
 

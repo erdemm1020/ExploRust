@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render, ScrollStrategy,
-    SharedString, UniformListScrollHandle, Window, WindowControlArea, div, prelude::*, px, svg,
-    uniform_list,
+    ClickEvent, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton,
+    NavigationDirection, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    WindowControlArea, div, prelude::*, px, svg, uniform_list,
 };
 
 use crate::{fs, theme::Theme};
@@ -213,6 +213,15 @@ impl Render for Browser {
             .id("root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev, _, cx| this.on_key(ev, cx)))
+            // Side mouse buttons: back / forward.
+            .on_mouse_up(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+            )
             .size_full()
             .flex()
             .bg(t.bg)
