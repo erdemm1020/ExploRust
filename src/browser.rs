@@ -12,6 +12,12 @@ const TOOLBAR_H: f32 = 44.0;
 const ROW_H: f32 = 26.0;
 const SIDEBAR_W: f32 = 180.0;
 
+struct Place {
+    name: SharedString,
+    icon: &'static str,
+    path: PathBuf,
+}
+
 pub struct Browser {
     cwd: PathBuf,
     entries: Vec<fs::Entry>,
@@ -19,7 +25,7 @@ pub struct Browser {
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     show_hidden: bool,
-    places: Vec<(SharedString, PathBuf)>,
+    places: Vec<Place>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
 }
@@ -33,16 +39,24 @@ impl Browser {
             .file_name()
             .map_or_else(|| "Home".into(), |n| n.to_string_lossy().into_owned());
 
+        let place = |name: &str, icon, path: PathBuf| Place {
+            name: name.to_string().into(),
+            icon,
+            path,
+        };
         let places = [
-            (home_name, home.clone()),
-            ("Desktop".into(), home.join("Desktop")),
-            ("Documents".into(), home.join("Documents")),
-            ("Downloads".into(), home.join("Downloads")),
-            ("Applications".into(), PathBuf::from("/Applications")),
+            place(&home_name, "icons/home.svg", home.clone()),
+            place("Desktop", "icons/desktop.svg", home.join("Desktop")),
+            place("Documents", "icons/file.svg", home.join("Documents")),
+            place("Downloads", "icons/downloads.svg", home.join("Downloads")),
+            place(
+                "Applications",
+                "icons/applications.svg",
+                "/Applications".into(),
+            ),
         ]
         .into_iter()
-        .filter(|(_, p)| p.is_dir())
-        .map(|(n, p)| (n.into(), p))
+        .filter(|p| p.path.is_dir())
         .collect();
 
         cx.observe_window_appearance(window, |_, _, cx| cx.notify())
@@ -220,9 +234,9 @@ impl Render for Browser {
 
 impl Browser {
     fn sidebar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let items = self.places.iter().enumerate().map(|(i, (name, path))| {
-            let active = *path == self.cwd;
-            let target = path.clone();
+        let items = self.places.iter().enumerate().map(|(i, place)| {
+            let active = place.path == self.cwd;
+            let target = place.path.clone();
             div()
                 .id(("place", i))
                 .h(px(28.0))
@@ -235,8 +249,8 @@ impl Browser {
                 .when(active, |d| d.bg(t.hover))
                 .hover(|d| d.bg(t.hover))
                 .on_click(cx.listener(move |this, _, _, cx| this.go_to(target.clone(), cx)))
-                .child(folder_icon(t.folder))
-                .child(name.clone())
+                .child(icon(place.icon, t.folder))
+                .child(place.name.clone())
         });
 
         div()
@@ -325,11 +339,7 @@ impl Browser {
                         } else {
                             (t.text, t.dim)
                         };
-                        let icon = if entry.is_dir {
-                            folder_icon(t.folder).into_any_element()
-                        } else {
-                            file_icon(t.file).into_any_element()
-                        };
+                        let icon = entry_icon(entry, t);
                         Some(
                             div().w_full().px_2().child(
                                 div()
@@ -438,20 +448,39 @@ impl Browser {
     }
 }
 
-fn folder_icon(color: gpui::Rgba) -> gpui::Svg {
+fn icon(name: &'static str, color: gpui::Rgba) -> gpui::Svg {
     svg()
-        .path("icons/folder.svg")
+        .path(name)
         .size(px(18.0))
         .flex_none()
         .text_color(color)
 }
 
-fn file_icon(color: gpui::Rgba) -> gpui::Div {
-    div()
-        .ml(px(2.0))
-        .w(px(13.0))
-        .h(px(16.0))
-        .flex_none()
-        .rounded_sm()
-        .bg(color)
+/// Icon for a list entry, picked from the file extension.
+fn entry_icon(entry: &fs::Entry, t: Theme) -> gpui::Svg {
+    if entry.is_dir {
+        return icon("icons/folder.svg", t.folder);
+    }
+    let ext = entry
+        .path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let name = match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "svg" | "bmp" | "tiff" | "ico" => {
+            "icons/image.svg"
+        }
+        "mp3" | "wav" | "flac" | "aac" | "m4a" | "ogg" | "mp4" | "mov" | "mkv" | "avi" | "webm" => {
+            "icons/media.svg"
+        }
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "dmg" | "pkg" => {
+            "icons/archive.svg"
+        }
+        "rs" | "js" | "ts" | "tsx" | "jsx" | "py" | "go" | "c" | "h" | "cpp" | "java" | "swift"
+        | "sh" | "json" | "toml" | "yaml" | "yml" | "html" | "css" | "kt" | "rb" => {
+            "icons/code.svg"
+        }
+        _ => "icons/file.svg",
+    };
+    icon(name, t.file)
 }
