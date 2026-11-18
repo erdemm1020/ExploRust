@@ -752,7 +752,7 @@ impl Browser {
                 cx.notify();
             }
             "n" if cmd && k.modifiers.shift => {
-                self.create_item(fs::create_file);
+                self.create_item(fs::create_folder);
                 cx.notify();
             }
             // ⌘⌥C copies the path as text, like Finder.
