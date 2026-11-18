@@ -11,6 +11,7 @@ use gpui::{
     svg, uniform_list,
 };
 
+mod ops;
 mod settings;
 mod updates;
 
@@ -22,6 +23,7 @@ use crate::{
     fs::{self, Sort, SortKey},
     text_field::{KeyResult, TextField},
     theme::Theme,
+    undo::UndoOp,
 };
 
 const TOOLBAR_H: f32 = 44.0;
@@ -165,6 +167,10 @@ pub struct Browser {
     menu: Option<ContextMenu>,
     config: Config,
     settings_open: bool,
+    jobs: Vec<ops::RunningJob>,
+    next_job: u64,
+    notice: Option<(String, std::time::Instant)>,
+    undo: crate::undo::UndoStack,
     update: updates::UpdateState,
     /// Terminal apps found when the settings page was opened.
     terminals: Vec<AppInfo>,
@@ -244,6 +250,10 @@ impl Browser {
             dates: DateFormat::new(config.relative_dates),
             menu: None,
             settings_open: false,
+            jobs: Vec::new(),
+            next_job: 0,
+            notice: None,
+            undo: crate::undo::UndoStack::default(),
             update: updates::UpdateState::Idle,
             terminals: Vec::new(),
             editors: Vec::new(),
@@ -316,6 +326,7 @@ impl Browser {
 
     /// Reload when the folder changed on disk (added, removed or renamed items).
     fn poll_changes(&mut self, cx: &mut Context<Self>) {
+        self.expire_notice(cx);
         let busy = self.renaming.is_some() || self.menu.is_some() || self.settings_open;
         if !self.config.live_refresh || busy || dir_mtime(&self.cwd) == self.listed_at {
             return;
@@ -771,6 +782,8 @@ impl Browser {
     /// Create something in the current folder, then let the user name it.
     fn create_item(&mut self, create: fn(&Path) -> std::io::Result<PathBuf>) {
         if let Ok(path) = create(&self.cwd) {
+            self.undo
+                .record("New item", UndoOp::Trash(vec![path.clone()]));
             self.reload();
             self.select_path(&path);
             self.begin_rename();
@@ -824,8 +837,13 @@ impl Browser {
     }
 
     fn trash_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        for path in paths {
-            let _ = crate::trash::move_to_trash(path);
+        // Where each item went in the Trash, so that ⌘Z can bring it back.
+        let trashed: Vec<(PathBuf, PathBuf)> = paths
+            .iter()
+            .filter_map(|p| crate::trash::move_to_trash(p).map(|t| (t, p.clone())))
+            .collect();
+        if !trashed.is_empty() {
+            self.undo.record("Move to Trash", UndoOp::MoveBack(trashed));
         }
         self.reload();
         cx.notify();
@@ -854,6 +872,10 @@ impl Browser {
             && r.field.text() != entry.name.as_ref()
             && let Ok(new_path) = fs::rename(&entry.path, r.field.text())
         {
+            self.undo.record(
+                "Rename",
+                UndoOp::MoveBack(vec![(new_path.clone(), entry.path.clone())]),
+            );
             self.reload();
             self.select_path(&new_path);
         }
@@ -906,19 +928,9 @@ impl Browser {
             .collect()
     }
 
-    /// Move (or copy) dropped paths into `dest`, then refresh the listing.
+    /// Move (or copy) dropped paths into `dest`, in the background.
     fn drop_paths(&mut self, paths: &[PathBuf], dest: &Path, copy: bool, cx: &mut Context<Self>) {
-        // A failed item (permissions, ...) must not stop the others.
-        let created: Vec<PathBuf> = paths
-            .iter()
-            .filter_map(|p| fs::transfer(p, dest, copy).ok())
-            .collect();
-        self.reload();
-        // Like Finder, what just landed in this folder is selected.
-        if dest == self.cwd {
-            self.select_paths(&created);
-        }
-        cx.notify();
+        self.transfer_items(paths.to_vec(), dest.to_path_buf(), copy, cx);
     }
 
     fn select_paths(&mut self, paths: &[PathBuf]) {
@@ -1049,6 +1061,8 @@ impl Browser {
             }
             "backspace" if cmd => self.trash_selection(window, cx),
             // ⌘⌥C copies the path as text, like Finder.
+            "z" if cmd && k.modifiers.shift => self.redo_last(cx),
+            "z" if cmd => self.undo_last(cx),
             "c" if cmd && k.modifiers.alt => self.copy_selection_path(cx),
             "c" if cmd => self.copy_selection(),
             // ⌘⌥V moves instead of copying, like Finder's "Move Item Here".
@@ -1788,7 +1802,15 @@ impl Browser {
             .border_t_1()
             .border_color(t.border)
             .child(bar)
-            .child(div().flex_none().child(installing.unwrap_or(status)))
+            // A running job (bar), or a short message, or the usual count.
+            .children(self.jobs_bar(t, cx))
+            .child(
+                div().flex_none().child(
+                    installing
+                        .or_else(|| self.current_notice().map(str::to_string))
+                        .unwrap_or(status),
+                ),
+            )
     }
 }
 

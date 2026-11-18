@@ -1,3 +1,4 @@
+use crate::jobs::Progress;
 use std::{
     cmp::Ordering,
     fs, io,
@@ -208,7 +209,18 @@ fn format_size(bytes: u64) -> String {
 
 /// Move or copy `src` into the folder `dest_dir`, returning the new path. Never overwrites: a name
 /// clash gets a numbered suffix ("name 2.ext").
+#[allow(dead_code)]
 pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<PathBuf> {
+    transfer_with(src, dest_dir, copy, &Progress::default())
+}
+
+/// Like [`transfer`], counting the bytes copied and stopping if the job is cancelled.
+pub fn transfer_with(
+    src: &Path,
+    dest_dir: &Path,
+    copy: bool,
+    progress: &Progress,
+) -> io::Result<PathBuf> {
     let name = src
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
@@ -226,14 +238,14 @@ pub fn transfer(src: &Path, dest_dir: &Path, copy: bool) -> io::Result<PathBuf> 
 
     let target = unique_path(dest_dir, name);
     if copy {
-        copy_recursive(src, &target)?;
+        crate::jobs::copy_tree(src, &target, progress)?;
         return Ok(target);
     }
     match fs::rename(src, &target) {
         Ok(()) => Ok(target),
         // Different volume: copy, then remove the original.
         Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-            copy_recursive(src, &target)?;
+            crate::jobs::copy_tree(src, &target, progress)?;
             if src.is_dir() {
                 fs::remove_dir_all(src)?;
             } else {
@@ -310,7 +322,7 @@ pub fn create_file(dir: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-fn unique_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+pub(crate) fn unique_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     let first = dir.join(name);
     if fs::symlink_metadata(&first).is_err() {
         return first;
@@ -325,22 +337,6 @@ fn unique_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
         })
         .find(|p| fs::symlink_metadata(p).is_err())
         .expect("infinite range")
-}
-
-fn copy_recursive(src: &Path, dst: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(src)?;
-    if meta.file_type().is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(src)?, dst)
-    } else if meta.is_dir() {
-        fs::create_dir(dst)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        }
-        Ok(())
-    } else {
-        fs::copy(src, dst).map(|_| ())
-    }
 }
 
 #[cfg(test)]
