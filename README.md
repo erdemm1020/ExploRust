@@ -8,6 +8,9 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Icônes par type de fichier : simples ou avancées (PDF rouge, tableur vert, code coloré par langage, dossiers Téléchargements / Images / Musique…)
 - Navigation précédent / suivant / dossier parent
 - Liste Nom / Date de modification / Taille, dossiers en premier
+- Onglets (`⌘T` nouveau, `⌘W` fermer, `⌃Tab` ou `⌘⇧[` `⌘⇧]` pour changer, `⌘1`…`⌘9`)
+- Bouton et raccourci `⌘R` pour rafraîchir
+- Dossiers en haut ou mélangés avec les fichiers (clic droit sur le fond, ou Settings) : trie par date pour voir le plus récent d'abord
 - Barre de recherche : filtre le dossier courant pendant la frappe
 - Tri par colonne : clic sur l'en-tête pour trier, nouveau clic pour inverser
 - Chemin cliquable et nombre d'éléments en bas

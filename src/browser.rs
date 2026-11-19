@@ -18,6 +18,7 @@ mod project_ui;
 mod remote;
 mod scans;
 mod settings;
+mod tabs;
 mod updates;
 
 use crate::{
@@ -104,6 +105,7 @@ enum MenuAction {
     NewFolder,
     NewFile,
     ToggleHidden,
+    ToggleFoldersOnTop,
 }
 
 impl MenuAction {
@@ -245,6 +247,9 @@ pub struct Browser {
     /// The Quick Look window, while it is open.
     quick_look: Option<std::process::Child>,
     places: Vec<Place>,
+    /// Open tabs. The active one lives in the fields above; its slot is stale.
+    tabs: Vec<tabs::Tab>,
+    active_tab: usize,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
 }
@@ -354,6 +359,8 @@ impl Browser {
             renaming: None,
             quick_look: None,
             places,
+            tabs: vec![tabs::Tab::default()],
+            active_tab: 0,
             scroll: UniformListScrollHandle::new(),
             focus,
         };
@@ -458,14 +465,29 @@ impl Browser {
         if !self.config.live_refresh || busy || dir_mtime(&self.cwd) == self.listed_at {
             return;
         }
+        self.reload_keeping_selection();
+        cx.notify();
+    }
+
+    /// Read the folder again, keeping the selection and the scroll position.
+    fn reload_keeping_selection(&mut self) {
         let keep = self.selected_paths();
         self.reload();
-        // Keep the selection, without scrolling the list around.
         self.selected = (0..self.entries.len())
             .filter(|&ix| keep.contains(&self.entries[ix].path))
             .collect();
         self.anchor = self.selected.first().copied();
         self.cursor = self.selected.last().copied();
+    }
+
+    /// The refresh button and ⌘R: list the folder again, and look up sizes again.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.fetch_remote(cx);
+        }
+        self.dir_sizes.clear();
+        self.sizing.clear();
+        self.reload_keeping_selection();
         cx.notify();
     }
 
@@ -728,6 +750,14 @@ impl Browser {
             entries.extend(project);
             entries.extend(claude);
             entries.push(MenuEntry::Separator);
+            entries.push(item(
+                if self.config.folders_on_top {
+                    "Mix Folders and Files"
+                } else {
+                    "Folders on Top"
+                },
+                ToggleFoldersOnTop,
+            ));
             entries.push(item(hidden, ToggleHidden));
         }
         self.menu = Some(ContextMenu {
@@ -1025,6 +1055,10 @@ impl Browser {
             MenuAction::Trash => return self.trash_selection(window, cx),
             MenuAction::NewFolder => self.create_item(fs::create_folder),
             MenuAction::NewFile => self.create_item(fs::create_file),
+            MenuAction::ToggleFoldersOnTop => {
+                let top = !self.config.folders_on_top;
+                self.update_config(|c| c.folders_on_top = top, cx);
+            }
             MenuAction::ToggleHidden => {
                 let show = !self.config.show_hidden;
                 self.update_config(|c| c.show_hidden = show, cx);
@@ -1315,6 +1349,25 @@ impl Browser {
         if k.key == "k" && k.modifiers.platform {
             return self.open_connect(cx);
         }
+        // Tabs and refresh work everywhere, on a server too.
+        let (cmd, shift) = (k.modifiers.platform, k.modifiers.shift);
+        match k.key.as_str() {
+            "t" if cmd => return self.new_tab(cx),
+            "w" if cmd => return self.close_tab(self.active_tab, cx),
+            "r" if cmd => return self.refresh(cx),
+            "tab" if k.modifiers.control => {
+                return self.cycle_tab(if shift { -1 } else { 1 }, cx);
+            }
+            "[" | "{" if cmd && shift => return self.cycle_tab(-1, cx),
+            "]" | "}" if cmd && shift => return self.cycle_tab(1, cx),
+            d if cmd && !shift && d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
+                let n = (d.as_bytes()[0] - b'0') as usize;
+                if (1..=9).contains(&n) {
+                    return self.switch_tab(n - 1, cx);
+                }
+            }
+            _ => {}
+        }
         if self.remote.is_some() {
             return self.on_remote_key(ev, window, cx);
         }
@@ -1495,6 +1548,7 @@ impl Render for Browser {
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            .children(self.tab_bar(t, cx))
                             .child(self.toolbar(t, cx))
                             .child(self.list(t, cx))
                             .child(self.status_bar(t, cx)),
@@ -1908,6 +1962,14 @@ impl Browser {
                     .truncate()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(self.title()),
+            )
+            .child(
+                nav("refresh", "↻", true)
+                    .text_size(px(17.0))
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+            )
+            .child(
+                nav("new-tab", "+", true).on_click(cx.listener(|this, _, _, cx| this.new_tab(cx))),
             )
             .child(self.search_box(t, cx))
     }
