@@ -158,6 +158,8 @@ pub struct Config {
     pub terminal: Option<PathBuf>,
     /// Code editor chosen by the user (`None`: the first one found on this Mac).
     pub editor: Option<PathBuf>,
+    /// Folders pinned in the sidebar, in order.
+    pub favorites: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -190,6 +192,7 @@ impl Default for Config {
             skipped_version: None,
             terminal: None,
             editor: None,
+            favorites: Vec::new(),
         }
     }
 }
@@ -271,6 +274,13 @@ impl Config {
                 "last_folder" => c.last_folder = path(value),
                 "terminal" => c.terminal = path(value),
                 "editor" => c.editor = path(value),
+                "favorite" => {
+                    if let Some(p) = path(value)
+                        && !c.favorites.contains(&p)
+                    {
+                        c.favorites.push(p);
+                    }
+                }
                 _ => {}
             }
         }
@@ -320,6 +330,9 @@ impl Config {
                 out.push_str(&format!("{key} = {}\n", p.display()));
             }
         }
+        for p in &self.favorites {
+            out.push_str(&format!("favorite = {}\n", p.display()));
+        }
         if let Some(v) = &self.skipped_version {
             out.push_str(&format!("skipped_version = {v}\n"));
         }
@@ -367,6 +380,7 @@ mod tests {
             claude_model: ClaudeModel::Haiku,
             terminal: Some("/Applications/Ghostty.app".into()),
             editor: Some("/Applications/Zed.app".into()),
+            favorites: vec!["/Users/me/My Docs".into(), "/tmp/a b".into()],
         };
         assert_eq!(Config::parse(&c.render()), c);
     }

@@ -9,6 +9,9 @@ Un explorateur de fichiers pour macOS, écrit en Rust avec [GPUI](https://www.gp
 - Navigation précédent / suivant / dossier parent
 - Liste Nom / Date de modification / Taille, dossiers en premier
 - Onglets (`⌘T` nouveau, `⌘W` fermer, `⌃Tab` ou `⌘⇧[` `⌘⇧]` pour changer, `⌘1`…`⌘9`)
+- Favoris : clic droit sur un dossier (ou sur le fond) > Add to Favorites ; ils apparaissent dans la barre latérale (clic droit pour les retirer)
+- Sélection à la souris en glissant dans le vide, clic dans le vide pour tout désélectionner
+- Clic molette sur un onglet pour le fermer
 - Bouton et raccourci `⌘R` pour rafraîchir
 - Dossiers en haut ou mélangés avec les fichiers (clic droit sur le fond, ou Settings) : trie par date pour voir le plus récent d'abord
 - Barre de recherche : filtre le dossier courant pendant la frappe

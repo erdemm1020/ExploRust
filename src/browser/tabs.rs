@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
+use gpui::{Context, IntoElement, MouseButton, SharedString, div, prelude::*, px};
 
 use super::Browser;
 use crate::theme::Theme;
@@ -141,9 +141,15 @@ impl Browser {
                 .text_size(px(12.0))
                 .when(active, |d| d.bg(t.hover).text_color(t.text))
                 .when(!active, |d| {
-                    d.text_color(t.dim).hover(|d| d.bg(t.hover).text_color(t.text))
+                    d.text_color(t.dim)
+                        .hover(|d| d.bg(t.hover).text_color(t.text))
                 })
                 .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(ix, cx)))
+                // Middle click anywhere on the tab closes it.
+                .on_mouse_up(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| this.close_tab(ix, cx)),
+                )
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(
                     div()

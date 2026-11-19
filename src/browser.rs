@@ -106,6 +106,7 @@ enum MenuAction {
     NewFile,
     ToggleHidden,
     ToggleFoldersOnTop,
+    ToggleFavorite,
 }
 
 impl MenuAction {
@@ -166,6 +167,17 @@ const MENU_MIN_W: f32 = 210.0;
 const MENU_MAX_W: f32 = 380.0;
 const MENU_ITEM_H: f32 = 24.0;
 const MENU_SEPARATOR_H: f32 = 9.0;
+
+/// A rubber band dragged over the list. Y values are relative to the top of the
+/// list content (so they stay right when scrolled); X values are window ones.
+struct Marquee {
+    start_x: f32,
+    start_y: f32,
+    x: f32,
+    y: f32,
+    /// Selection kept when ⌘ or ⇧ was held at the start.
+    base: BTreeSet<usize>,
+}
 
 /// A row being renamed in place.
 struct Renaming {
@@ -247,6 +259,11 @@ pub struct Browser {
     /// The Quick Look window, while it is open.
     quick_look: Option<std::process::Child>,
     places: Vec<Place>,
+    /// Set when the open menu was opened on a favorite of the sidebar.
+    menu_favorite: Option<PathBuf>,
+    /// Rubber-band selection being dragged, and a row was pressed (so not empty space).
+    marquee: Option<Marquee>,
+    row_pressed: bool,
     /// Open tabs. The active one lives in the fields above; its slot is stale.
     tabs: Vec<tabs::Tab>,
     active_tab: usize,
@@ -359,6 +376,9 @@ impl Browser {
             renaming: None,
             quick_look: None,
             places,
+            menu_favorite: None,
+            marquee: None,
+            row_pressed: false,
             tabs: vec![tabs::Tab::default()],
             active_tab: 0,
             scroll: UniformListScrollHandle::new(),
@@ -640,6 +660,95 @@ impl Browser {
         }
     }
 
+    /// Where the list content starts and how far it is scrolled.
+    fn list_geometry(&self) -> (gpui::Bounds<Pixels>, f32) {
+        let handle = self.scroll.0.borrow();
+        let bounds = handle.base_handle.bounds();
+        // Scrolled down, the offset is negative.
+        (bounds, f32::from(handle.base_handle.offset().y))
+    }
+
+    /// Content-relative Y of a window Y.
+    fn content_y(&self, window_y: f32) -> f32 {
+        let (bounds, offset) = self.list_geometry();
+        window_y - f32::from(bounds.origin.y) - offset
+    }
+
+    fn start_marquee(&mut self, ev: &MouseDownEvent) {
+        let (x, y) = (
+            f32::from(ev.position.x),
+            self.content_y(f32::from(ev.position.y)),
+        );
+        let keep = ev.modifiers.platform || ev.modifiers.shift;
+        let base = if keep {
+            self.selected.clone()
+        } else {
+            BTreeSet::new()
+        };
+        if !keep {
+            self.clear_selection();
+        }
+        self.marquee = Some(Marquee {
+            start_x: x,
+            start_y: y,
+            x,
+            y,
+            base,
+        });
+    }
+
+    fn drag_marquee(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let y = self.content_y(f32::from(position.y));
+        let row_h = self.config.density.row_height();
+        let Some(m) = self.marquee.as_mut() else {
+            return;
+        };
+        m.x = f32::from(position.x);
+        m.y = y;
+        let (top, bottom) = (m.start_y.min(y), m.start_y.max(y));
+        // The list has 4px of padding above its first row.
+        let first = ((top - 4.0) / row_h).floor().max(0.0) as usize;
+        let last = ((bottom - 4.0) / row_h).floor();
+        let mut selected = m.base.clone();
+        if last >= 0.0 {
+            let last = (last as usize).min(self.entries.len().saturating_sub(1));
+            if !self.entries.is_empty() {
+                selected.extend(first..=last);
+            }
+        }
+        selected.retain(|&ix| ix < self.entries.len());
+        self.anchor = selected.first().copied();
+        self.cursor = selected.last().copied();
+        self.selected = selected;
+        cx.notify();
+    }
+
+    /// The rubber band, drawn over the list.
+    fn marquee_overlay(&self, t: Theme) -> Option<impl IntoElement> {
+        let m = self.marquee.as_ref()?;
+        // A plain click is no band.
+        if (m.x - m.start_x).abs() < 3.0 && (m.y - m.start_y).abs() < 3.0 {
+            return None;
+        }
+        let (bounds, offset) = self.list_geometry();
+        let ox = f32::from(bounds.origin.x);
+        let left = m.start_x.min(m.x) - ox;
+        let top = m.start_y.min(m.y) + offset;
+        let (w, h) = ((m.x - m.start_x).abs(), (m.y - m.start_y).abs());
+        Some(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(w))
+                .h(px(h))
+                .rounded_sm()
+                .border_1()
+                .border_color(t.accent)
+                .bg(Hsla::from(t.accent).opacity(0.18)),
+        )
+    }
+
     /// A single folder is entered; files are opened with their default app.
     fn open_selected(&mut self, cx: &mut Context<Self>) {
         if self.remote.is_some() {
@@ -664,6 +773,7 @@ impl Browser {
     /// Open the right-click menu: file actions on a row, folder actions elsewhere.
     fn open_menu(&mut self, position: Point<Pixels>, on_item: bool) {
         self.menu_cursor = None;
+        self.menu_favorite = None;
         if self.remote.is_some() {
             return self.open_remote_menu(position, on_item);
         }
@@ -715,6 +825,7 @@ impl Browser {
             entries.push(item("Copy Path", CopyPath));
             if single && selected[0].is_dir {
                 entries.extend(paste);
+                entries.push(self.favorite_item(&selected[0].path));
             }
             entries.push(item(
                 &match selected.len() {
@@ -743,6 +854,7 @@ impl Browser {
             entries.push(item("New Folder", NewFolder));
             entries.push(item("New File", NewFile));
             entries.extend(paste);
+            entries.push(self.favorite_item(&self.cwd));
             entries.extend(editor);
             entries.push(terminal);
             entries.push(open_in);
@@ -765,6 +877,26 @@ impl Browser {
             entries,
             submenu: None,
         });
+    }
+
+    /// "Add to Favorites" or "Remove from Favorites" for a folder.
+    fn favorite_item(&self, dir: &Path) -> MenuEntry {
+        let label = if self.config.favorites.iter().any(|f| f == dir) {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        };
+        MenuEntry::Item(label.into(), MenuAction::ToggleFavorite)
+    }
+
+    /// Pin a folder in the sidebar, or unpin it.
+    fn toggle_favorite(&mut self, dir: PathBuf) {
+        if let Some(i) = self.config.favorites.iter().position(|f| *f == dir) {
+            self.config.favorites.remove(i);
+        } else if dir.is_dir() {
+            self.config.favorites.push(dir);
+        }
+        let _ = self.config.save();
     }
 
     /// The terminal to use: the user's choice if it still exists, else the system one.
@@ -1055,6 +1187,13 @@ impl Browser {
             MenuAction::Trash => return self.trash_selection(window, cx),
             MenuAction::NewFolder => self.create_item(fs::create_folder),
             MenuAction::NewFile => self.create_item(fs::create_file),
+            MenuAction::ToggleFavorite => {
+                let dir = self
+                    .menu_favorite
+                    .take()
+                    .unwrap_or_else(|| self.target_dir());
+                self.toggle_favorite(dir);
+            }
             MenuAction::ToggleFoldersOnTop => {
                 let top = !self.config.folders_on_top;
                 self.update_config(|c| c.folders_on_top = top, cx);
@@ -1503,6 +1642,14 @@ impl Render for Browser {
             }))
             // Dragging the edge of the sidebar.
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if this.marquee.is_some() {
+                    if ev.pressed_button == Some(MouseButton::Left) {
+                        this.drag_marquee(ev.position, cx);
+                    } else {
+                        this.marquee = None;
+                        cx.notify();
+                    }
+                }
                 if ev.pressed_button != Some(MouseButton::Left) {
                     // The button was let go outside the window: stop following the mouse.
                     if this.resizing_sidebar.take().is_some() {
@@ -1514,9 +1661,12 @@ impl Render for Browser {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| {
+                cx.listener(|this, _, _, cx| {
                     if this.resizing_sidebar.take().is_some() {
                         this.save_sidebar();
+                    }
+                    if this.marquee.take().is_some() {
+                        cx.notify();
                     }
                 }),
             )
@@ -1860,6 +2010,7 @@ impl Browser {
                     .window_control_area(WindowControlArea::Drag),
             )
             .child(div().px_2().flex().flex_col().gap_0p5().children(items))
+            .children(self.favorites_section(t, cx))
             .children(self.servers_section(t, cx))
             // Pushes the settings button to the bottom.
             .child(div().flex_1())
@@ -1919,6 +2070,86 @@ impl Browser {
                         }),
                     ),
             )
+    }
+
+    /// Pinned folders, under the places. Folders that vanished are not shown.
+    fn favorites_section(&self, t: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let favorites: Vec<&PathBuf> = self
+            .config
+            .favorites
+            .iter()
+            .filter(|p| p.is_dir())
+            .collect();
+        if favorites.is_empty() {
+            return None;
+        }
+        let rail = self.sidebar_collapsed;
+        let mut section = div()
+            .px_2()
+            .pt_3()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .when(!rail, |d| {
+                d.child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_size(px(11.0))
+                        .text_color(t.dim)
+                        .child("FAVORITES"),
+                )
+            });
+        for (i, path) in favorites.into_iter().enumerate() {
+            let active = *path == self.cwd && !self.settings_open && self.remote.is_none();
+            let (go, menu) = (path.clone(), path.clone());
+            let name: SharedString = path
+                .file_name()
+                .map_or_else(|| "/".into(), |n| n.to_string_lossy().into_owned())
+                .into();
+            let el = div()
+                .id(("favorite", i))
+                .h(px(if rail { 32.0 } else { 28.0 }))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .when(rail, |d| d.justify_center())
+                .rounded_md()
+                .cursor_pointer()
+                .when(active, |d| d.bg(t.hover))
+                .hover(|d| d.bg(t.hover))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings_open = false;
+                    this.go_to(go.clone(), cx);
+                    cx.notify();
+                }))
+                // Right click: take it off the sidebar.
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                        this.menu_cursor = None;
+                        this.menu_favorite = Some(menu.clone());
+                        this.menu = Some(ContextMenu {
+                            position: ev.position,
+                            entries: vec![MenuEntry::Item(
+                                "Remove from Favorites".into(),
+                                MenuAction::ToggleFavorite,
+                            )],
+                            submenu: None,
+                        });
+                        cx.notify();
+                    }),
+                )
+                .child(icon("icons/folder.svg", t.folder))
+                .when(!rail, |d| d.child(div().min_w_0().truncate().child(name)));
+            section = section.child(if self.remote.is_some() {
+                el
+            } else {
+                Self::drop_target(el, path.clone(), t, cx)
+            });
+        }
+        Some(section.into_any_element())
     }
 
     fn toolbar(&self, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2123,6 +2354,7 @@ impl Browser {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                            this.row_pressed = true;
                                             let m = ev.modifiers;
                                             if !this.selected.contains(&ix)
                                                 && !m.platform
@@ -2251,7 +2483,30 @@ impl Browser {
                     .child("No results")
                     .into_any_element()
             } else {
-                list.into_any_element()
+                // Pressing the empty part of the list clears the selection, and
+                // dragging from there draws a rubber band over the rows.
+                div()
+                    .id("list-area")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                            // A row handled it (it comes first): not empty space.
+                            if std::mem::take(&mut this.row_pressed) {
+                                return;
+                            }
+                            this.menu = None;
+                            this.start_marquee(ev);
+                            cx.notify();
+                        }),
+                    )
+                    .child(list)
+                    .children(self.marquee_overlay(t))
+                    .into_any_element()
             })
     }
 
