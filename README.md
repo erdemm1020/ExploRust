@@ -140,9 +140,11 @@ La première compilation télécharge et compile GPUI : compte quelques minutes.
 | `⌘↓` | Ouvrir la sélection |
 | `⌘[` / `⌘]` | Précédent / suivant |
 | Boutons latéraux de la souris | Précédent / suivant |
+| `Espace` | Quick Look : aperçu de la sélection, `Espace` à nouveau pour fermer |
 | `⌘⇧.` | Afficher / masquer les fichiers cachés (affichés tout en haut de la liste) |
 | Glisser-déposer | Déplacer vers un dossier, la sidebar ou le chemin du bas |
 | `⌥` + glisser-déposer | Copier au lieu de déplacer |
+| Glisser hors de la fenêtre | Déposer dans le Finder, une autre app ou une autre fenêtre (copie) |
 | Déposer depuis une autre app | Copier dans le dossier visé ou le dossier courant |
 | Clic sur un en-tête de colonne | Trier par Name, Date Modified ou Size (un 2e clic inverse l'ordre) |
 | Clic droit sur un élément | Ouvrir, révéler dans le Finder, Copy / Paste Item, Open With (choisir une app, ou la définir par défaut), ouvrir dans VS Code / Zed / un terminal, copier le chemin, renommer, mettre à la corbeille |

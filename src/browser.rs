@@ -242,6 +242,8 @@ pub struct Browser {
     /// Modification time of the folder when it was listed, to spot changes.
     listed_at: Option<std::time::SystemTime>,
     renaming: Option<Renaming>,
+    /// The Quick Look window, while it is open.
+    quick_look: Option<std::process::Child>,
     places: Vec<Place>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
@@ -350,6 +352,7 @@ impl Browser {
             listed_at: None,
             config,
             renaming: None,
+            quick_look: None,
             places,
             scroll: UniformListScrollHandle::new(),
             focus,
@@ -1340,6 +1343,10 @@ impl Browser {
                 cx.notify();
             }
             "backspace" if cmd => self.trash_selection(window, cx),
+            "space" if !cmd && !k.modifiers.control && !k.modifiers.alt => {
+                let paths = self.selected_paths();
+                crate::quicklook::toggle(&mut self.quick_look, &paths);
+            }
             // ⌘⌥C copies the path as text, like Finder.
             "s" if cmd && k.modifiers.alt => {
                 self.toggle_sidebar(cx);
@@ -1412,6 +1419,18 @@ impl Render for Browser {
             .id("root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev, window, cx| this.on_key(ev, window, cx)))
+            // Dragged out of the window: hand over to a real macOS drag, so the
+            // rows can be dropped on Finder, other apps and other windows.
+            .on_drag_move::<DragPaths>(cx.listener(
+                |this, ev: &gpui::DragMoveEvent<DragPaths>, window, cx| {
+                    if this.remote.is_none()
+                        && !ev.bounds.contains(&ev.event.position)
+                        && crate::native_drag::begin(&ev.drag(cx).0)
+                    {
+                        cx.stop_active_drag(window);
+                    }
+                },
+            ))
             // From the menu bar (and ⌘, for the settings).
             .on_action(cx.listener(|this, _: &crate::OpenSettings, _, cx| this.toggle_settings(cx)))
             .on_action(cx.listener(|this, _: &crate::CheckForUpdates, window, cx| {

@@ -7,8 +7,8 @@ edition = "2024"
 anyhow = "1.0.104"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "block2", "NSPasteboard", "NSPasteboardItem", "NSColor", "NSColorSpace", "NSApplication", "NSAppearance", "NSResponder", "NSSharingService"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError", "NSPathUtilities", "NSArray", "NSBundle", "block2", "NSDateFormatter", "NSDate", "NSFormatter"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "block2", "NSPasteboard", "NSPasteboardItem", "NSColor", "NSColorSpace", "NSApplication", "NSAppearance", "NSResponder", "NSSharingService", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSView", "NSEvent", "NSImage", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError", "NSPathUtilities", "NSArray", "NSBundle", "block2", "NSDateFormatter", "NSDate", "NSFormatter", "NSGeometry", "NSObject"] }
 serde_json = "1.0.154"
 
 [profile.release]
